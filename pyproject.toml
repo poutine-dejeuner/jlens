@@ -1,0 +1,32 @@
+[project]
+name = "jspace"
+version = "0.1.0"
+description = "Jacobian lens spectral analysis across Pythia checkpoints"
+requires-python = ">=3.12"
+dependencies = [
+    "torch==2.11.0",
+    "transformers==5.15.1",
+    "accelerate==1.14.0",
+    "datasets>=3.0.0",
+    "h5py>=3.0",
+    "scipy>=1.0",
+    "matplotlib>=3.0",
+    "seaborn>=0.13",
+    "click>=8.0",
+    "pyyaml>=6.0",
+    "tqdm>=4.0",
+]
+
+[project.scripts]
+jlens = "jlens.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.12.0,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv]
+managed = true
+package = false
+
+[tool.uv.sources]
+jlens = { workspace = false }

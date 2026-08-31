@@ -1,0 +1,430 @@
+Research directions around the Jacobian-lens global workspace:
+spectra, coherence, development, and coupled feature learning
+Working note∗
+August 21, 2026
+
+Abstract
+Anthropic’s Jacobian-lens paper [1] reports that concept directions in the residual stream of
+large language models are transported to the output in an approximately context-independent,
+linear way across a band of intermediate layers—an “emergent global workspace”—readable
+through a corpus-averaged Jacobian J¯ℓ = Ex [∂hfinal /∂hℓ ]. This note collects six interrelated
+research directions proposed in a discussion of that paper: (I) the singular-value spectra of J¯ℓ
+across depth, including completed measurements on Qwen3.5-4B; (II) transport coherence—
+the per-context Jacobian variance—as a workspace diagnostic; (III) a perturbative residualstream interpretation of the lens and its relation to iterative-inference views of transformers;
+(IV) the developmental emergence of the workspace across pretraining checkpoints; (V)
+coupled attention–MLP feature-learning dynamics as a candidate mechanism for workspace
+formation; and (VI) a program connecting the neural feature ansatz to random-matrix theory,
+with a three-spectrum experiment relating weights, gradients, and the lens. Concrete next
+measurements are listed in Section 8.
+
+Background and notation
+Let hℓ ∈ Rd denote the residual stream at layer ℓ of an L-layer decoder transformer with
+unembedding WU ∈ RV ×d . The Jacobian lens [1] fits the corpus-averaged layer-to-final Jacobian
+␔
+␕
+∂hfinal
+¯
+Jℓ = Ex
+(x) ,
+(1)
+∂hℓ
+and reads intermediate content through WU J¯ℓ . The paper’s central empirical claims are (i) a
+three-band structure in depth (sensory / workspace / motor), visible in CKA block structure and
+in the effective dimensionality of the readout vectors; (ii) approximately context-independent,
+modular transport of concept directions within the workspace band; and (iii) causal validity of
+the transported directions under steering and ablation. Independent replications and tooling now
+exist for open models [2, 3, 4, 5], and a related per-input (“detached”) Jacobian SVD analysis on
+Qwen 3 and Gemma 3 is given by [6].
+Two decompositions organize everything below. First, writing the per-block map as hℓ+1 =
+hℓ + Fℓ (hℓ ), the lens factorizes into per-block Jacobians,
+␂
+␃
+J¯ℓ = Ex ML−1 (x) · · · Mℓ (x) ,
+∗
+
+Mk (x) = I +
+
+∂Fk
+(x),
+∂h
+
+(2)
+
+Summarizing a research discussion (August 2026). Companion measurements on Qwen3.5-4B are in the
+notebook rmt analysis/ and its report jlens spectra.html.
+
+1
+
+␌so the logit lens is the zeroth-order approximation Mk ≈ I. Second, for any per-context Jacobian
+Jℓ (x),
+h
+i
+h
+i
+Ex Jℓ⊤ Jℓ = J¯ℓ⊤ J¯ℓ + Σℓ ,
+Σℓ ≡ Ex (Jℓ − J¯ℓ )⊤ (Jℓ − J¯ℓ ) ⪰ 0,
+(3)
+separating coherent (context-independent) transport from context fluctuation. The coherence
+fraction
+tr J¯ℓ⊤ J¯ℓ
+tr J¯ℓ⊤ J¯ℓ
+κℓ ≡
+=
+(4)
+tr E[Jℓ⊤ Jℓ ]
+tr J¯ℓ⊤ J¯ℓ + tr Σℓ
+measures how much of the transport energy survives averaging, and is proposed below as a
+workspace-onset diagnostic.
+
+2
+
+Direction I: Spectral characterization of J¯ℓ across depth
+
+Motivation. The paper measures the effective linear dimensionality of WU J¯ℓ per layer on a
+frontier model (its Fig. 28d), but no published work computes the full singular-value spectrum
+of the fitted lens as a function of depth on open models. The closest existing results are the
+“transport-cone geometry” analysis in the independent replication [3] (raw vs. J-transported
+effective dimensionality across a GPT-2 124M–Qwen3 14B ladder, including a self-trained negative
+control in which transport increases isotropy) and the per-input detached-Jacobian SVDs of [6],
+which concern a different object (exact per-context, not corpus-averaged, Jacobians).
+Status: measured on Qwen3.5-4B (d = 2560, L = 31, V = 248,320). The companion
+2 d·
+notebook establishes the following. The readout adds nothing spectrally: spec(WU J¯ℓ ) = σW
+spec(J¯ℓ ) to log-eigenvalue correlation 0.994–0.9999 at every stored layer, a free-multiplication
+statement in which WU ’s Marchenko–Pastur (MP) factor is nearly a delta (q = d/V ≈ 0.0103);
+2 J¯⊤ J.
+¯ The bulk is real,
+the lens spectrum is a population-covariance spectrum with Σpop = σW
+not sampling noise: refitting the lens on disjoint prompt shards decomposes energy into a signal
+term flat in the number of prompts n and a noise term scaling exactly as n−1/2 , and the denoised
+cross-shard spectrum reproduces the released n=1000 spectrum to 1–4% per layer. The Jacobian
+¯ climbing from 0.18
+is well described as J¯ℓ = aℓ I + Rℓ with the √
+identity coefficient aℓ = tr J/d
+(layer 0) to ∼ 1.17 (layer 27) while ∥R∥F / d falls from 2.02 to 0.51; entropy effective rank
+runs 46 → 2009. An MP fit’s effective aspect ratio qeff = d/rankeff drains monotonically from
+∼ 11 (early) through 1 (layers 18–22) to 0.21 (layer 30). Three spectral regimes result: early
+layers where MP is bookkeeping only—75–93% of eigenvalues form a low-λ tail following a clean
+power law, CDF(λ) ∝ λ0.43–0.46 over three decades, nearly layer-independent; a crossover (layers
+18–22) where MP fails outright; and late layers (23–27) where the bulk is close to a shifted square
+Ginibre aI + sG, with ∼ 90 genuine spike eigenvalues on top and a two-sample KS distance to
+the matched random control bottoming out at 1.3× the null. The spike count is strikingly flat in
+depth (∼ 84–154).
+Interpretation and open items. The early-layer power-law exponent is a quantitative
+measurement of inter-layer alignment: a product of N free factors would give a Fuss–Catalan
+small-λ CDF exponent 1/(N + 1) [50], so the observed ≈ 0.45, independent of the factor count
+N = 15–27, corresponds to an effective free-factor count of ≈ 1.2: the trained chain of per-block
+Jacobians has the small-singular-value statistics of roughly one matrix. This is the strongest
+available spectral evidence that training correlates the factors in (2) into an approximately shared
+2
+
+␌singular basis, consistent with deterministic results on singular-vector alignment in products with
+separated spectra [7]. Open items: (a) whether the ∼ 100 spike eigenvectors of J¯⊤ J¯ coincide with
+the interpretable J-space directions (overlap matrix with the paper’s concept/readout vectors);
+(b) whether the qeff = 1 crossover layer coincides with behaviorally determined band boundaries
+(CKA blocks, verbal-report onset) on the same model—if so, a forward-pass-only spectral detector
+of the workspace/motor boundary; (c) reproduction across model families and scales.
+
+3
+
+Direction II: Transport coherence as a workspace diagnostic
+
+Motivation. Locally, the Jacobian is exact everywhere; what distinguishes the workspace
+band is not that linearization works but that averaging does—feature directions are transported
+to the output in a context-independent way, so per-context Jacobians agree and their mean is
+meaningful. The natural order parameter is the per-context variance Σℓ in (3), or the scalar
+coherence fraction κℓ in (4). The workspace hypothesis predicts κℓ low in sensory layers, rising
+sharply at the workspace onset (the paper’s “ignition” layer), and near one in the motor band.
+Status. The cross-shard noise ledger in the companion notebook is, on reinterpretation,
+Pa first
+−1
+measurement of Σℓ : for a lens fitted on n prompts,
+the
+estimation
+error
+is
+E
+=
+n
+i ∆Ji ,
+√
+√
+so the measured (noise· n) column equals tr Σℓ up to prompt-correlation corrections. The
+ledger is self-consistent as a variance decomposition: the per-prompt off-identity energy satisfies
+∥R1 ∥2 ≈ ∥R̄∥2 + tr Σ to within 5% at both tested depths. The resulting coherence fraction rises
+from κ ≈ 0.41 at layer 4 to κ ≈ 0.97 at layer 30, with the fluctuation-to-coherent energy ratio
+falling by more than two orders of magnitude. Six layers cannot distinguish a sharp onset from a
+gradual drift; the full-depth curve is nearly free to compute given the existing per-shard lenses
+and is the highest-priority next measurement. A second-moment refinement—eigenvectors of
+Σℓ and their overlap with the coherent subspace—distinguishes isotropic context noise from
+structured context-dependence that the averaged lens is blind to.
+
+4
+
+Direction III: The perturbative residual-stream interpretation
+
+Framing. By (2), the J-lens is “logit lens plus resummed first-order corrections”: the logit lens
+works late because few near-identity factors remain, and fails early because the accumulated
+product has rotated the basis. The residual architecture makes the expansion around the identity
+natural, and the notebook’s aℓ I + Rℓ decomposition quantifies it directly (∥R∥ falling with depth
+while a → 1). The refinement developed in discussion: the early/middle boundary is not where a
+Taylor expansion starts converging (linearization is locally exact everywhere) but where averaged
+linearization starts working, i.e., where transport becomes context-independent (Section 3). The
+genuinely novel content of the workspace paper sits in that amendment.
+Prior work. The view of residual layers as small iterative updates has three strands. Iterative
+inference / unrolled estimation: residual blocks as incremental refinement [8, 9], ResNets as
+ensembles of shallow paths [10]. Continuous-depth and dynamical-systems views: neural ODEs
+[11], transformers as multi-particle systems [12], and the interacting-particle analysis of attention
+flows [13]. Interpretability-side evidence: the logit lens [14] and tuned lens [15] are premised on
+iterative inference; linear cross-layer transport maps [16]; robustness of middle layers to deletion
+and swapping, with a stage decomposition (detokenization / feature engineering / prediction
+3
+
+␌ensembling / residual sharpening) that maps onto the sensory/workspace/motor bands [17]; and
+the related layer-pruning and shared-basis observations of [18, 19]. On the spectral-theory side,
+[7] proves depth-induced separation of ordered singular values in products of masked linear maps
+and the resulting forced alignment of singular bases—the formal machinery for when the averaged
+J¯ℓ is a well-conditioned transport map.
+
+5
+
+Direction IV: Developmental emergence across pretraining
+checkpoints
+
+Motivation. All work above concerns trained models. No published study fits the J-lens, or
+tracks the workspace signatures, across a pretraining checkpoint ladder; the paper itself contains
+only a two-point base-vs-post-trained comparison. Dense public checkpoint suites (Pythia [20],
+OLMo [21]) make the longitudinal study cheap: the community cost analyses indicate a usable
+lens fits on tens of prompts, so a full 154-checkpoint Pythia ladder is modest compute.
+Adjacent checkpoint results. Several existing studies cover components of the story. Checkpointwise hidden-state displacement analysis on Pythia and OLMo shows the final layer acquires its
+large “jump” during training [22]—i.e., the small-update middle / large-update terminal asymmetry of the perturbative picture is developmental, not architectural. Layer-wise representation
+metrics across Pythia checkpoints show intermediate layers change most during training while
+early layers stabilize quickly [23]. Crosscoder-based tracking finds a middle-layer representational
+phase transition in Pythia-1B between 128M and 4B tokens [24]. The tuned-lens paper correlates
+the training iteration at which an example is learned with its inference-time prediction depth on
+Pythia-12B [15], suggesting shared refinement structure between the depth and training axes.
+Complementary spectral and norm statistics across checkpoints appear in [25] (the residual
+stream’s identity-preservation property holds from initialization—so the skip-path backbone
+is architectural even though the band structure is learned), in EleutherAI’s training-dynamics
+observations (outlier norms stabilizing early; circuit SVD directions converging late) [26], in Ai2’s
+OLMo magnitude study [27], and in developmental circuit-formation studies [28].
+Proposed measurement. Fit the lens per checkpoint on Pythia-1B (or OLMo for longerhorizon maintenance), and plot as a function of both depth and training step: the CKA block
+structure, readout kurtosis, effective dimensionality of WU J¯ℓ , the coherence fraction κℓ (Section 3),
+the spectral quantities of Section 2 (qeff drainage, power-law exponent, spike count), and the
+MLP-gain curve (Section 6). Predictions: the three-block CKA structure is absent at early
+checkpoints; the workspace band crystallizes in or near the 128M–4B-token window of the
+crosscoder transition; the early-layer power-law exponent starts near the Fuss–Catalan value
+(uncorrelated factors) and falls toward the trained value ≈ 0.45 as alignment develops; and the
+coherence fraction’s depth profile sharpens from flat to sigmoidal.
+
+6
+
+Direction V: Coupled attention–MLP feature-learning dynamics
+
+Motivation. The workspace paper finds that MLP blocks amplify J-lens directions from
+preceding attention blocks by roughly an order of magnitude—evidence of weight-space alignment
+4
+
+␌between what attention writes and what MLPs read. Two distinct coupling mechanisms appear
+in the theory literature and should be distinguished. (i) Loss-mediated competition: subcircuits independent in parameter space, coupled only through explained-away loss, as in the
+differential-learning-kinetics analysis of the memorization/generalization (IWL/ICL) transition
+[29], its precursor on abrupt induction-head learning [30], and the associative-memory account
+of induction-circuit formation with fast MLP bigram statistics and slow attention circuits [31];
+see also [32, 33, 34, 35]. (ii) Weight-space alignment: genuinely coupled gradient dynamics,
+as in JoMA, which integrates out the attention logits to obtain modified MLP dynamics and
+predicts sparse-then-dense attention and hierarchical composition, verified on Pythia and OPT
+[36]; provable joint attention–MLP dynamics in knowledge-storage settings [37]; and solvable
+co-evolution models for retrieval-plus-update computations [38].
+The alignment strand. The MLP-gain finding is an in-the-wild instance of alignment phenomena studied in feature-learning theory: coupled singular-mode dynamics in deep linear networks,
+where balancedness forces adjacent layers to share singular vectors [39]; the silent-alignment
+effect, where kernels align to task structure before the loss moves [40]; and the neural feature
+ansatz (NFA), the empirical law that a trained layer’s weight Gram matrix aligns with the
+average gradient outer product (AGOP) of the network with respect to that layer’s input [41],
+with derived consequences such as deep neural collapse [42]. In lens language: the AGOP is
+the second moment E[J ⊤ J] whose first moment the lens fits, so NFA predicts precisely that
+downstream weights preferentially read high-average-Jacobian directions—the measured MLP
+gain.
+Interpretive mapping and proposed measurement. A tidy (speculative) synthesis: the
+alignment mechanism explains how a broadcast subspace forms (mutual read/write amplification
+along shared directions in the rich regime), while the competition mechanism explains which
+computations end up inside it—practiced, high-frequency computations compile into direct MLP
+lookups outside the broadcast channel (the paper’s “automatic” pathway; IWL-like), while
+computations requiring flexible routing remain attention-mediated within it (ICL-like). ICL
+transience [34] then reads as a rehearsed computation migrating out of the workspace. Proposed
+measurement, joining Direction IV: track the MLP-gain curve and broadcast-head statistics per
+checkpoint alongside an IWL/ICL behavioral probe. Predictions: gain starts near 1 and grows
+concentrated in the emerging workspace band; the two-timescale results [31, 36] fix an ordering
+(MLP associative content before read/write alignment); and in small trainable models the gain
+growth rate is modulated by data diversity K, per [29].
+
+7
+
+Direction VI: Neural feature ansatz meets random-matrix
+theory
+
+The program. Taking expectations of the NFA relates the spectrum of the weights to the
+spectrum of the Jacobian: W ⊤ W ∝ E[J ⊤ J] = J¯⊤ J¯ + Σ. The weight spectrum therefore
+dominates the lens spectrum in the PSD order, with gap exactly the per-context covariance
+Σ—so the weight–lens correspondence holds conditionally on coherence, i.e., inside the workspace.
+RMT enters through a signal-plus-noise model J(x) = J¯ + ∆J(x): with approximately isotropic
+fluctuations, E[J ⊤ J] is a spiked (deformed MP) covariance, predicting workspace directions
+appear as outliers above the bulk of the weight Gram matrix iff their coherent strength exceeds
+5
+
+␌the BBP threshold [47, 46, 45] set by the fluctuation variance, with outlier count tracking
+workspace dimensionality. Two structural caveats identified in discussion: trained weight spectra
+are often heavy-tailed rather than clean MP [48], favoring eigenvector-overlap statistics over
+eigenvalue fits; and freeness—required for free-convolution tools—fails maximally in the aligned
+subspace, since NFA is the statement that training aligns W with the downstream Jacobian. The
+bulk-plus-non-free-spike structure is therefore forced, not a modeling convenience. Substituting
+the factorization (2) into NFA layer by layer yields a closed system of coupled spectral fixed-point
+equations, whose ingredients exist in embryo: exact deep-Jacobian spectra at initialization via
+free multiplicative convolution [49], dynamical mean-field theories of feature learning through
+training [43, 44], and the AGOP-derived collapse results [42].
+Status and revision after the Qwen3.5-4B measurements. The measured spectra
+¯ and the MP-like bulk survives denoising: the bulk
+(Section 2) are of the averaged lens J,
+lives inside the coherent transport, not in Σ. The original spiked-Σ story is thus unrefuted but
+concerns a different matrix; the mean transport operator is itself bulk-plus-spikes. The NFA
+leg remains entirely unmeasured. The decisive experiment is the three-spectrum comparison
+ℓ ) of the MLP input weights (forward pass free);
+on one open model, per layer: (1) SVD(Win
+⊤
+(2) the corpus AGOP E[J J] by autodiff, where the relevant Jacobian is essentially WU Jℓ , the
+¯ whose bulk-plus-spike shape is now known.
+object the lens fits; (3) the fitted lens Gram J¯⊤ J,
+Weight Gram ≈ AGOP tests NFA in transformers; AGOP ≈ lens-spike + fluctuation-bulk tests
+the moment decomposition; and their conjunction tests whether the workspace is visible in the
+weights alone—a training-free, forward-pass-free workspace detector.
+
+8
+
+Summary of proposed measurements
+
+In rough priority order, using the existing Qwen3.5-4B artifacts and public checkpoint suites.
+First, the full-depth coherence curve κℓ from the four per-shard lenses, testing for a sharp onset
+against a gradual drift, together with the eigenstructure of Σℓ . Second, the spike-overlap analysis:
+the overlap matrix between the top ∼ 100 eigenvectors of J¯ℓ⊤ J¯ℓ and the interpretable J-space
+directions, resolving whether the flat-in-depth spike population is the workspace. Third, the
+band-boundary test: whether the qeff = 1 crossover (layers 18–22 on Qwen3.5-4B) coincides with
+behaviorally determined workspace/motor boundaries. Fourth, the three-spectrum NFA test of
+Section 7. Fifth, the developmental study of Section 5: lens fits per Pythia/OLMo checkpoint,
+tracking band structure, coherence, spectral exponents, and MLP gain, with the data-diversity
+modulation experiment of Section 6 in small trainable models. Throughout, the early-layer
+power-law exponent serves as a scalar alignment order parameter (effective free-factor count),
+cheap to compute at every (layer, checkpoint) pair.
+
+References
+[1] Anthropic Interpretability Team. [The Jacobian-lens / emergent global workspace paper]. Transformer
+Circuits Thread, July 2026. https://transformer-circuits.pub/2026/workspace/.
+[2] N. Nanda et al. A review of Anthropic’s global workspace paper. LessWrong
+/
+Neuronpedia,
+2026.
+https://www.lesswrong.com/posts/zFJ3ZdQwrTWE9jT5S/
+a-review-of-anthropic-s-global-workspace-paper.
+
+6
+
+␌[3] tao-hpu. jspace-replication: independent replication of J-space experiments on small open-weights
+models. GitHub, 2026. https://github.com/tao-hpu/jspace-replication. ArXiv write-up forthcoming.
+[4] Neuronpedia. Interactive Jacobian lenses for open models, 2026. https://www.neuronpedia.org/.
+[5] Anthropic. jacobian-lens: companion code. GitHub, 2026. https://github.com/anthropics/
+jacobian-lens.
+[6] J. Golden. Detached Jacobian linearization of large language models. arXiv:2505.24293, 2025.
+[7] Why Deep Jacobian Spectra Separate. ICML 2026.
+[8] K. Greff, R. K. Srivastava, J. Schmidhuber. Highway and residual networks learn unrolled iterative
+estimation. arXiv:1612.07771, 2016.
+[9] S. Jastrzebski, D. Arpit, N. Ballas, V. Verma, T. Che, Y. Bengio. Residual connections encourage
+iterative inference. arXiv:1710.04773, 2017.
+[10] A. Veit, M. Wilber, S. Belongie. Residual networks behave like ensembles of relatively shallow
+networks. arXiv:1605.06431, NeurIPS 2016.
+[11] R. T. Q. Chen, Y. Rubanova, J. Bettencourt, D. Duvenaud. Neural ordinary differential equations.
+arXiv:1806.07366, NeurIPS 2018.
+[12] Y. Lu, Z. Li, D. He, Z. Sun, B. Dong, T. Qin, L. Wang, T.-Y. Liu. Understanding and improving
+Transformer from a multi-particle dynamic system point of view. arXiv:1906.02762, 2019.
+[13] B. Geshkovski, C. Letrouit, Y. Polyanskiy, P. Rigollet. A mathematical perspective on Transformers.
+arXiv:2312.10794, 2023.
+[14] nostalgebraist. Interpreting GPT: the logit lens. LessWrong, 2020.
+[15] N. Belrose, Z. Furman, L. Smith, D. Halawi, I. Ostrovsky, L. McKinney, S. Biderman, J. Steinhardt.
+Eliciting latent predictions from transformers with the tuned lens. arXiv:2303.08112, 2023.
+[16] A. Y. Din, T. Karidi, L. Choshen, M. Geva. Jump to conclusions: short-cutting transformers with
+linear transformations. arXiv:2303.09435, 2023.
+[17] V. Lad, W. Gurnee, M. Tegmark. The remarkable robustness of LLMs: stages of inference? 2024.
+[18] A. Gromov, K. Tirumala, H. Shapourian, P. Glorioso, D. A. Roberts. The unreasonable ineffectiveness
+of the deeper layers. 2024.
+[19] Q. Sun, M. Pickett, et al. Transformer layers as painters. 2024.
+[20] S. Biderman et al. Pythia: a suite for analyzing large language models across training and scaling.
+arXiv:2304.01373, 2023.
+[21] D. Groeneveld et al. OLMo: accelerating the science of language models. arXiv:2402.00838, 2024.
+[22] K. Shibata, K. Yano, R. Takahashi, J. Lee, W. Ikeda, J. Suzuki. Suppressing final layer hidden
+state jumps in transformer pretraining. Findings of EACL 2026. https://aclanthology.org/2026.
+findings-eacl.64/.
+[23] O. Skean et al. Layer by layer:
+arXiv:2502.02013, 2025.
+
+uncovering hidden representations in language models.
+
+7
+
+␌[24] Crosscoding through time: tracking emergence and consolidation of linguistic representations throughout LLM pretraining. arXiv:2509.05291, 2025.
+[25] Algebraic dead directions in LayerNorm transformers: a forward-pass-only diagnostic at LLM scale.
+arXiv:2606.19491, 2026.
+[26] B. Millidge, E. Winsor. Basic facts about language models during training. AI Alignment Forum,
+2023.
+[27] Allen Institute for AI. Investigating pretraining dynamics and stability with OLMo checkpoints. Ai2
+Blog, 2024.
+[28] When do attention circuits form? Developmental trajectories of capability and attention-sink
+emergence across three 1B-class architectures. arXiv:2606.02378, 2026.
+[29] A. Nguyen, G. Reddy. Differential learning kinetics govern the transition from memorization to
+generalization during in-context learning. arXiv:2412.00104, 2024.
+[30] G. Reddy. The mechanistic basis of data dependence and abrupt learning in an in-context classification
+task. arXiv:2312.03002, 2023.
+[31] A. Bietti, V. Cabannes, D. Bouchacourt, H. Jégou, L. Bottou. Birth of a transformer: a memory
+viewpoint. NeurIPS 2023.
+[32] C. Olsson et al. In-context learning and induction heads. arXiv:2209.11895, 2022.
+[33] S. C. Y. Chan et al. Data distributional properties drive emergent in-context learning in transformers.
+arXiv:2205.05055, NeurIPS 2022.
+[34] A. K. Singh, S. C. Y. Chan, T. Moskovitz, E. Grant, A. M. Saxe, F. Hill. The transient nature of
+emergent in-context learning in transformers. arXiv:2311.08360, 2023.
+[35] A. K. Singh, T. Moskovitz, F. Hill, S. C. Y. Chan, A. M. Saxe. What needs to go right for an
+induction head? A mechanistic study of in-context learning circuits and their formation. ICML 2024.
+[36] Y. Tian, Y. Wang, Z. Zhang, B. Chen, S. Du. JoMA: demystifying multilayer transformers via joint
+dynamics of MLP and attention. arXiv:2310.00535, ICLR 2024.
+[37] Filtering with self-attention and storing with MLP: provable knowledge acquisition and extraction in
+one-layer transformers. arXiv:2508.00901, 2025.
+[38] Learning dynamics of chain-of-thought state tracking in a solvable transformer model.
+arXiv:2606.18164, 2026.
+[39] A. M. Saxe, J. L. McClelland, S. Ganguli. Exact solutions to the nonlinear dynamics of learning in
+deep linear neural networks. arXiv:1312.6120, ICLR 2014.
+[40] A. Atanasov, B. Bordelon, C. Pehlevan. Neural networks as kernel learners: the silent alignment
+effect. arXiv:2111.00034, ICLR 2022.
+[41] A. Radhakrishnan, D. Beaglehole, P. Pandit, M. Belkin. Mechanism of feature learning in deep fully
+connected networks and kernel machines that recursively learn features. arXiv:2212.13881; Science
+383, 2024.
+[42] D. Beaglehole, P. Súkenı́k, M. Mondelli, M. Belkin. Average gradient outer product as a mechanism
+for deep neural collapse. NeurIPS 2024.
+
+8
+
+␌[43] B. Bordelon, C. Pehlevan. Self-consistent dynamical field theory of kernel evolution in wide neural
+networks. arXiv:2205.09653, NeurIPS 2022.
+[44] G. Yang, E. J. Hu. Tensor Programs IV: feature learning in infinite-width neural networks. ICML
+2021.
+[45] V. A. Marchenko, L. A. Pastur. Distribution of eigenvalues for some sets of random matrices.
+Mat. Sb. 72(114):507–536, 1967.
+[46] I. M. Johnstone. On the distribution of the largest eigenvalue in principal components analysis.
+Ann. Statist. 29(2):295–327, 2001.
+[47] J. Baik, G. Ben Arous, S. Péché. Phase transition of the largest eigenvalue for nonnull complex
+sample covariance matrices. Ann. Probab. 33(5):1643–1697, 2005.
+[48] C. H. Martin, M. W. Mahoney. Implicit self-regularization in deep neural networks: evidence from
+random matrix theory and implications for learning. arXiv:1810.01075; JMLR 22, 2021.
+[49] J. Pennington, S. Schoenholz, S. Ganguli. Resurrecting the sigmoid in deep learning through dynamical
+isometry: theory and practice. NeurIPS 2017.
+[50] K. A. Penson, K. Życzkowski. Product of Ginibre matrices: Fuss–Catalan and Raney distributions.
+Phys. Rev. E 83:061118, 2011.
+
+9
+
+␌
+
