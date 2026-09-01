@@ -234,7 +234,7 @@ def analyze_checkpoint(stats: dict) -> dict:
         Dict with per-layer spectral quantities.
     """
     n_layers = len(stats["jbar"])
-    d_model = stats["jbar"][0].shape[0]
+    d_model = stats["jbar"][0].shape[0] if stats["jbar"][0] is not None else 0
 
     results = {
         "n_layers": n_layers,
@@ -255,6 +255,15 @@ def analyze_checkpoint(stats: dict) -> dict:
 
     for layer_idx in range(n_layers):
         gram = stats["jtj_gram"][layer_idx]
+        if gram is None:
+            eigenvalues.append(np.array([np.nan]))
+            effective_ranks.append(np.nan)
+            q_eff.append(np.nan)
+            n_spikes.append(np.nan)
+            power_law_alpha.append(np.nan)
+            mp_sigma2.append(np.nan)
+            continue
+
         eigvals = eigen_decompose(gram)
 
         eigenvalues.append(eigvals)

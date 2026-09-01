@@ -57,49 +57,66 @@ class JacobianAccumulator:
             # Frobenius norm squared: tr(J⊤J)
             self.sum_tr_jtj[layer_idx] += torch.sum(j_cpu**2).item()
 
-    def get_mean(self, layer_idx: int) -> torch.Tensor:
-        """Get J̄_ℓ = mean Jacobian for a layer."""
+    def get_mean(self, layer_idx: int) -> Optional[torch.Tensor]:
+        """Get J̄_ℓ = mean Jacobian for a layer, or None if no data."""
         if self.sum_j[layer_idx] is None:
-            raise ValueError(f"No data for layer {layer_idx}")
+            return None
         return self.sum_j[layer_idx] / self.n
 
-    def get_gram(self, layer_idx: int) -> torch.Tensor:
-        """Get J̄⊤J̄ for a layer."""
+    def get_gram(self, layer_idx: int) -> Optional[torch.Tensor]:
+        """Get J̄⊤J̄ for a layer, or None if no data."""
         jbar = self.get_mean(layer_idx)
+        if jbar is None:
+            return None
         return (jbar.T @ jbar).to(self.dtype)
 
-    def get_coherence(self, layer_idx: int) -> float:
-        """Get κ_ℓ = tr(J̄⊤J̄) / E[tr(J⊤J)]."""
+    def get_coherence(self, layer_idx: int) -> Optional[float]:
+        """Get κ_ℓ = tr(J̄⊤J̄) / E[tr(J⊤J)], or None if no data."""
         jbar = self.get_mean(layer_idx)
+        if jbar is None:
+            return None
         tr_jbart_jbar = torch.sum(jbar**2).item()
         tr_mean = self.sum_tr_jtj[layer_idx] / self.n
         if tr_mean == 0:
             return 0.0
         return tr_jbart_jbar / tr_mean
 
-    def get_a_coeff(self, layer_idx: int) -> float:
-        """Get a_ℓ = tr(J̄)/d."""
+    def get_a_coeff(self, layer_idx: int) -> Optional[float]:
+        """Get a_ℓ = tr(J̄)/d, or None if no data."""
         jbar = self.get_mean(layer_idx)
+        if jbar is None:
+            return None
         return torch.trace(jbar).item() / self.d_model
 
-    def get_r_norm(self, layer_idx: int) -> float:
-        """Get ‖R‖_F / √d where R = J̄ - a_ℓ·I."""
+    def get_r_norm(self, layer_idx: int) -> Optional[float]:
+        """Get ‖R‖_F / √d where R = J̄ - a_ℓ·I, or None if no data."""
         jbar = self.get_mean(layer_idx)
+        if jbar is None:
+            return None
         a = torch.trace(jbar).item() / self.d_model
         eye = torch.eye(self.d_model, device=jbar.device, dtype=jbar.dtype)
         r = jbar - a * eye
         return torch.sqrt(torch.sum(r**2)).item() / (self.d_model**0.5)
 
-    def get_tr_jtj_mean(self, layer_idx: int) -> float:
-        """Get E[tr(J⊤J)] for a layer."""
+    def get_tr_jtj_mean(self, layer_idx: int) -> Optional[float]:
+        """Get E[tr(J⊤J)], or None if no data."""
+        if self.sum_j[layer_idx] is None:
+            return None
         return self.sum_tr_jtj[layer_idx] / self.n
 
     def get_all_stats(self) -> dict:
-        """Get all accumulated statistics for all layers."""
+        """Get all accumulated statistics for layers that have data."""
+        jbar_list = []
+        jtj_gram_list = []
+        for i in range(self.n_layers):
+            m = self.get_mean(i)
+            g = self.get_gram(i)
+            jbar_list.append(m.numpy() if m is not None else None)
+            jtj_gram_list.append(g.numpy() if g is not None else None)
         return {
             "n": self.n,
-            "jbar": [self.get_mean(i).numpy() for i in range(self.n_layers)],
-            "jtj_gram": [self.get_gram(i).numpy() for i in range(self.n_layers)],
+            "jbar": jbar_list,
+            "jtj_gram": jtj_gram_list,
             "coherence": [self.get_coherence(i) for i in range(self.n_layers)],
             "a_coeff": [self.get_a_coeff(i) for i in range(self.n_layers)],
             "r_norm": [self.get_r_norm(i) for i in range(self.n_layers)],

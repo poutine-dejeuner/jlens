@@ -20,6 +20,7 @@ try:
 except ImportError:
     pass
 
+from ._bridge import get_upstream
 from .accumulator import JacobianAccumulator
 from .checkpoint_manager import (
     get_checkpoint_steps,
@@ -27,18 +28,41 @@ from .checkpoint_manager import (
     unload_checkpoint,
 )
 from .config import PipelineConfig
-from .jacobian import compute_layer_jacobians_blockwise
-from .prompts import load_prompts
+from .jacobian import compute_layer_jacobians
 from .spectra import analyze_checkpoint
 from .storage import is_checkpoint_done, save_checkpoint_result
 
 logger = logging.getLogger(__name__)
 
 
+def _wrap_model(hf_model, tokenizer):
+    """Wrap an HF model as a LensModel using upstream jlens.from_hf.
+    
+    Auto-detects layout, with a fallback for Pythia-160M which uses
+    lm_head instead of embed_out.
+    """
+    upstream = get_upstream()
+    try:
+        return upstream.from_hf(hf_model, tokenizer)
+    except ValueError:
+        # Pythia/GPT-NeoX variants: try explicit layout
+        # Some Pythia checkpoints use lm_head instead of embed_out
+        if hasattr(hf_model, 'gpt_neox') and hasattr(hf_model, 'lm_head'):
+            layout = upstream.Layout(
+                path='gpt_neox',
+                layers='layers',
+                norm='final_layer_norm',
+                embed='embed_in',
+                lm_head='lm_head',
+            )
+            return upstream.from_hf(hf_model, tokenizer, layout=layout)
+        raise
+
+
 def run_checkpoint(
     config: PipelineConfig,
     step: int,
-    prompts: list[dict],
+    prompts: list[str],
     accumulator_class: type = JacobianAccumulator,
 ) -> dict:
     """Process a single checkpoint.
@@ -46,7 +70,7 @@ def run_checkpoint(
     Args:
         config: Pipeline configuration
         step: Training step to process
-        prompts: Pre-loaded tokenized prompts
+        prompts: Raw text prompts (upstream jlens handles tokenization).
         accumulator_class: Accumulator class to use
 
     Returns:
@@ -56,7 +80,7 @@ def run_checkpoint(
 
     # Load model
     dtype = getattr(torch, config.model_dtype)
-    model, tokenizer = load_checkpoint(
+    hf_model, tokenizer = load_checkpoint(
         config.model_id,
         step,
         dtype=dtype,
@@ -64,9 +88,12 @@ def run_checkpoint(
     )
 
     try:
-        n_layers = _get_n_layers(model)
-        d_model = _get_d_model(model)
-        layers = config.layers or list(range(n_layers))
+        # Wrap as LensModel using upstream adapter (handles GPT-NeoX/Pythia)
+        lens_model = _wrap_model(hf_model, tokenizer)
+
+        n_layers = lens_model.n_layers
+        d_model = lens_model.d_model
+        layers = config.layers or list(range(n_layers - 1))  # upstream: source < target_layer = n_layers-1
 
         logger.info(f"Model: {n_layers} layers, d_model={d_model}")
         logger.info(f"Processing layers: {layers}")
@@ -74,13 +101,14 @@ def run_checkpoint(
         # Initialize accumulator
         accum = accumulator_class(n_layers, d_model, dtype=torch.float32)
 
-        # Process prompts
-        for prompt in tqdm(prompts, desc=f"step{step} prompts"):
-            input_ids = prompt["input_ids"].unsqueeze(0).to(model.device)
-            attention_mask = prompt["attention_mask"].unsqueeze(0).to(model.device)
-
-            jacobians = compute_layer_jacobians_blockwise(
-                model, input_ids, attention_mask, layers
+        # Process prompts (now raw text, upstream handles tokenization)
+        from tqdm import tqdm
+        for text in tqdm(prompts, desc=f"step{step} prompts"):
+            jacobians = compute_layer_jacobians(
+                lens_model,
+                text,
+                layers,
+                max_seq_len=config.max_seq_len,
             )
 
             accum.update(jacobians)
@@ -95,13 +123,14 @@ def run_checkpoint(
         save_checkpoint_result(config.results_dir, step, stats, spectral)
 
         # Cleanup
-        unload_checkpoint(model, tokenizer)
+        unload_checkpoint(hf_model, tokenizer)
+        del lens_model
 
         return {"stats": stats, "spectral": spectral}
 
     except Exception as e:
         logger.error(f"Error processing step {step}: {e}")
-        unload_checkpoint(model, tokenizer)
+        unload_checkpoint(hf_model, tokenizer)
         raise
 
 
@@ -141,17 +170,17 @@ def run_pipeline(config: PipelineConfig) -> None:
         logger.info("Nothing to do!")
         return
 
-    # Pre-load prompts (same for all checkpoints)
+    # Pre-load prompts as raw text (upstream jlens handles tokenization per prompt)
     logger.info("Loading prompts...")
-    # Need a tokenizer just for tokenizing prompts
-    # Use a cheap temporary model load for tokenization
+    # Use a cheap temporary model load just for the tokenizer
     _, tokenizer = load_checkpoint(
         config.model_id,
         steps[0],
         dtype=getattr(torch, config.model_dtype),
         cache_dir=config.cache_dir,
     )
-    prompts = load_prompts(
+    from .prompts import load_prompts_text
+    prompts = load_prompts_text(
         tokenizer,
         n_prompts=config.n_prompts,
         max_seq_len=config.max_seq_len,
@@ -193,25 +222,4 @@ def run_pipeline(config: PipelineConfig) -> None:
             logger.warning(f"  step {step}: {err}")
 
 
-def _get_n_layers(model) -> int:
-    """Get number of transformer layers from model."""
-    if hasattr(model, "gpt_neox"):
-        return len(model.gpt_neox.layers)
-    elif hasattr(model.model, "layers"):
-        return len(model.model.layers)
-    else:
-        # Fallback: count from config
-        if hasattr(model.config, "num_hidden_layers"):
-            return model.config.num_hidden_layers
-        if hasattr(model.config, "n_layer"):
-            return model.config.n_layer
-        raise ValueError("Cannot determine number of layers")
 
-
-def _get_d_model(model) -> int:
-    """Get model dimension."""
-    if hasattr(model.config, "hidden_size"):
-        return model.config.hidden_size
-    if hasattr(model.config, "d_model"):
-        return model.config.d_model
-    raise ValueError("Cannot determine d_model")
