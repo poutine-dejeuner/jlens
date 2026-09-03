@@ -9,6 +9,7 @@
 \usepackage{xcolor}
 \usepackage{enumitem}
 \usepackage{float}
+\usepackage{graphicx}
 
 \hypersetup{
     colorlinks=true,
@@ -26,7 +27,7 @@
 \maketitle
 
 \begin{abstract}
-This document catalogs every J-lens metric computed from the Jacobian lens $\bar{J}_\ell = \mathbb{E}[\partial h_{\text{final}} / \partial h_\ell]$ applied to Pythia-160M-deduped across 153 pretraining checkpoints, alongside the benchmark evaluation scores used for correlation analysis. Each entry includes the mathematical definition, computational provenance, and source code location.
+This document catalogs every J-lens metric computed from the Jacobian lens $\bar{J}_\ell = \mathbb{E}[\partial h_{\text{final}} / \partial h_\ell]$ applied to Pythia-160M-deduped across 153 pretraining checkpoints, alongside the benchmark evaluation scores used for correlation analysis. Each entry includes the mathematical definition, the \emph{motivation} for why the metric is informative, computational provenance, and source code location.
 \end{abstract}
 
 \tableofcontents
@@ -42,6 +43,8 @@ All J-lens metrics are derived from the \textbf{mean Jacobian} $\bar{J}_\ell \in
 \end{equation}
 where $h_\ell \in \mathbb{R}^d$ is the hidden state at layer $\ell$ after the residual stream update, and $h_{\text{final}}$ is the final-layer hidden state. The Jacobian estimator used is from \texttt{anthropics/jacobian-lens}~\cite{jacobian-lens}, which computes per-prompt Jacobians via efficient forward-mode differentiation with \texttt{functorch} and per-block factorization for memory efficiency.
 
+The decomposition $\bar{J}_\ell = a_\ell I + R_\ell$ organizes the analysis: $a_\ell I$ is the scalar identity component (the ``skip connection'' contribution), and $R_\ell$ captures everything off-diagonal (the ``computation'' contribution). This decomposition is natural in the residual architecture where $h_{\ell+1} = h_\ell + F_\ell(h_\ell)$, so the per-block Jacobian is $I + \partial F_\ell / \partial h_\ell$---the identity is the zeroth-order term and $R_\ell$ resums the first-order corrections.
+
 \subsection{Primary Accumulated Metrics}
 
 These are computed online in \texttt{JacobianAccumulator}~(\texttt{jlens/accumulator.py}) and stored in \texttt{results/stepXXXX/stats.h5} per layer.
@@ -55,7 +58,14 @@ These are computed online in \texttt{JacobianAccumulator}~(\texttt{jlens/accumul
   a_\ell = \frac{\operatorname{tr}(\bar{J}_\ell)}{d}
 \end{equation}
 
-\textbf{Interpretation:} Decompose $\bar{J}_\ell = a_\ell I + R_\ell$, where $R_\ell$ is the off-identity residual. $a_\ell = 1$ when $\bar{J}_\ell \approx I$ (near-initialization), and $a_\ell \to 0$ as the model develops non-trivial layer-to-layer transformations. This is the primary diagnostic for the ``identity collapse'' phase of training.
+\textbf{Motivation.} The residual architecture means each layer's linearized update is $I + \partial F_\ell / \partial h_\ell$. If the non-residual computation $F_\ell$ is negligible, the per-block map is $I$ and the full chain of Jacobians is also $I$---the model is doing nothing beyond the skip connection. $a_\ell$ measures how far the \emph{mean} transport has departed from this null model.
+
+Why it matters:
+\begin{itemize}
+  \item \textbf{On the Qwen3.5-4B trained model} (Direction~I, companion notebook): $a_\ell$ climbs from $\approx 0.18$ (layer~0) to $\approx 1.17$ (layer~27). The early layers have shrunk away from the identity (off-diagonal computation dominates), while late layers converge back to it (residual updates become small corrections). The identity coefficient thus defines the \emph{spectral regime boundaries}: low-$a$ early layers in the power-law bulk regime, $a \approx 1$ late layers in the near-Ginibre regime.
+  \item \textbf{Across training} (Direction~IV, this project): $a_0$ drops from 1.00 (step~1) to 0.17 (step~143,000). This drop reflects the \emph{emergence of structured off-diagonal transport}---the model learns to route information across token positions and feature dimensions. The identity coefficient is therefore a scalar readout of how much ``computation'' the model has learned to perform at each layer.
+  \item \textbf{Predictive power:} $a_0$ is the \textbf{single best predictor} of downstream benchmark performance, with Spearman $\rho = -0.90$ against ARC-Easy. As $a_0$ falls, accuracy rises near-monotonically. No other J-lens metric matches this predictive strength.
+\end{itemize}
 
 \textbf{Storage:} \texttt{stats.h5} attribute \texttt{a\_coeff} per layer group.
 
@@ -69,9 +79,26 @@ These are computed online in \texttt{JacobianAccumulator}~(\texttt{jlens/accumul
 \begin{equation}
   \kappa_\ell = \frac{\operatorname{tr}(\bar{J}_\ell^\top \bar{J}_\ell)}{\mathbb{E}_i\left[\operatorname{tr}\!\big(J^{(i)\top}_\ell J^{(i)}_\ell\big)\right]}
   = \frac{\|\bar{J}_\ell\|_F^2}{\mathbb{E}\big[\|J_\ell\|_F^2\big]}
+  = \frac{\text{coherent transport energy}}{\text{total transport energy}}
 \end{equation}
 
-\textbf{Interpretation:} The fraction of the per-prompt Jacobian energy that is captured by the mean. $\kappa_\ell \approx 1$ means all prompts share the same linear transport map (the ``workspace'' is rigid). $\kappa_\ell \ll 1$ means the map is highly prompt-dependent. Falls from $\sim$0.94 to $\sim$0.39 in Layer~0 across training.
+\textbf{Motivation.} The central claim of the Jacobian-lens paper is not that linearization works locally (it does, by differentiability, everywhere), but that \emph{averaging} works: feature directions are transported to the output in a context-independent way, so per-prompt Jacobians $J_\ell^{(i)}$ agree and their mean $\bar{J}_\ell$ is meaningful. $\kappa_\ell$ is the natural scalar order parameter for this hypothesis (Direction~II, \S3 of the research note).
+
+The moment decomposition:
+\begin{equation}
+  \mathbb{E}[J_\ell^\top J_\ell] = \bar{J}_\ell^\top \bar{J}_\ell + \Sigma_\ell,
+  \qquad
+  \Sigma_\ell \equiv \mathbb{E}\left[(J_\ell - \bar{J}_\ell)^\top (J_\ell - \bar{J}_\ell)\right] \succeq 0
+\end{equation}
+separates the coherent (context-independent, $\bar{J}_\ell^\top \bar{J}_\ell$) from the fluctuating (context-dependent, $\Sigma_\ell$) transport. $\kappa_\ell$ is the ratio of coherent to total trace energy.
+
+Why it matters:
+\begin{itemize}
+  \item \textbf{Workspace-onset diagnostic:} The workspace hypothesis predicts $\kappa_\ell$ \emph{low} in early (sensory) layers, rising sharply at the workspace ``ignition'' layer, and $\kappa_\ell \approx 1$ in the motor band. A flat $\kappa_\ell$ profile would falsify the workspace claim.
+  \item \textbf{On Qwen3.5-4B:} $\kappa$ rises from $\approx 0.41$ (layer~4) to $\approx 0.97$ (layer~30), with the fluctuation-to-coherent energy ratio falling by two orders of magnitude. Six layers cannot distinguish a sharp onset from a gradual drift; the full-depth curve is a key open measurement.
+  \item \textbf{On Pythia-160M across training:} $\kappa_0$ drops from 0.94 (step~1) to 0.37 (step~143,000)---the opposite of the depth profile! At initialization, $\kappa$ is high everywhere because $J \approx I$ always (trivial agreement). As training proceeds, per-prompt Jacobians \emph{diverge}, and the mean becomes less representative. $\kappa_0$ is strongly anti-correlated with downstream performance ($\rho = -0.84$ with ARC-Easy).
+  \item \textbf{$\kappa$ at late training vs.\ $\kappa$ at initialization are different things:} In a trained model, low $\kappa$ in early layers = structured, prompt-specific transport. At initialization, high $\kappa$ = trivial identity transport. The \emph{shape} of $\kappa(\ell)$ (flat at init, structured at convergence) is the developmental signature.
+\end{itemize}
 
 \textbf{Storage:} \texttt{stats.h5} attribute \texttt{coherence} per layer group.
 
@@ -86,7 +113,16 @@ These are computed online in \texttt{JacobianAccumulator}~(\texttt{jlens/accumul
   \|R_\ell\| = \frac{1}{\sqrt{d}}\left\|\bar{J}_\ell - a_\ell I\right\|_F
 \end{equation}
 
-\textbf{Interpretation:} The Frobenius norm of the residual after subtracting the scalar identity component, normalized by $\sqrt{d}$ to make it comparable across model sizes. Grows as the model learns structured off-diagonal transport.
+where $R_\ell = \bar{J}_\ell - a_\ell I$ is the traceless residual after removing the scalar identity component ($\operatorname{tr}(R_\ell) = 0$).
+
+\textbf{Motivation.} The decomposition $\bar{J}_\ell = a_\ell I + R_\ell$ partitions the mean transport into a scalar shrinkage/expansion ($a_\ell$) and everything else ($R_\ell$). $\|R_\ell\|$ measures the \emph{total off-identity structure}---off-diagonal entries, anisotropic diagonal entries---in a single scalar. Normalization by $\sqrt{d}$ makes it comparable across model sizes.
+
+Why it matters:
+\begin{itemize}
+  \item \textbf{On Qwen3.5-4B:} $\|R_\ell\| / \sqrt{d}$ falls from 2.02 (layer~0) to 0.51 (layer~27), mirroring the $a_\ell$ climb. The off-identity structure is largest in early layers and collapses toward zero in late layers. Together with $a_\ell$, this defines the three spectral regimes (early power-law, crossover, late Ginibre).
+  \item \textbf{On Pythia-160M:} $\|R_0\|$ grows during training as the model accumulates structured computation. It is complementary to $a_\ell$: $a_\ell$ measures the identity component shrinking, $\|R_\ell\|$ measures the off-identity component growing. They are not redundant because $\bar{J}_\ell$ can have the same $a_\ell$ but very different $R_\ell$ structure (e.g., purely diagonal vs.\ rotation-like).
+  \item \textbf{Relation to coherence:} In the early layers of a trained model, $\|R_\ell\|$ is large (strong off-diagonal structure) and $\kappa_\ell$ is low (context-dependent). These are independent dimensions: $R_\ell$ describes the \emph{mean} structure, $\kappa_\ell$ describes how \emph{representative} the mean is.
+\end{itemize}
 
 \textbf{Storage:} \texttt{stats.h5} attribute \texttt{r\_norm} per layer group.
 
@@ -102,7 +138,14 @@ These are computed online in \texttt{JacobianAccumulator}~(\texttt{jlens/accumul
   = \frac{1}{N} \sum_{i=1}^{N} \|J_\ell^{(i)}\|_F^2
 \end{equation}
 
-\textbf{Interpretation:} The average squared Frobenius norm of per-prompt Jacobians. Measures the total ``energy'' of the transport map. Decreases from $\sim$8500 to $\sim$1000 in Layer~0, reflecting the shrinkage of the Jacobian as the model organizes.
+\textbf{Motivation.} This is the average squared Frobenius norm of the per-prompt Jacobians---the total ``energy'' of the transport map, combining both coherent and fluctuating components. Together with $\bar{J}_\ell$ it determines $\kappa_\ell$ and with $\bar{J}_\ell$ and $\Sigma_\ell$ it decomposes into structured plus noise components.
+
+Why it matters:
+\begin{itemize}
+  \item \textbf{Shrinkage during training:} $\mathbb{E}[\operatorname{tr}(J_0^\top J_0)]$ drops from $\sim$8,500 (step~1) to $\sim$1,000 (step~143,000) in Pythia-160M Layer~0. This reflects the well-known phenomenon that trained networks develop smaller Jacobian norms (implicit regularization, edge-of-chaos dynamics). The shrinkage is not uniform across layers: deep layers ($\ell \geq 8$) maintain higher energy, consistent with the ``motor'' band where the model must actively route information to the output.
+  \item \textbf{Predictive power:} $\mathbb{E}[\operatorname{tr}(J_0^\top J_0)]$ has Spearman $\rho = -0.88$ with SciQ, $-0.85$ with LAMBADA, $-0.85$ with PIQA. Energy shrinkage tracks learning.
+  \item \textbf{Per-prompt variance:} Comparing $\mathbb{E}[\|J\|_F^2]$ with $\|\bar{J}\|_F^2$ gives $\Sigma_\ell$'s trace---the fluctuation energy. The ratio of fluctuation to coherent energy is a direct measure of context-dependence strength.
+\end{itemize}
 
 \textbf{Storage:} \texttt{stats.h5} attribute \texttt{tr\_jtj\_mean} per layer group.
 
@@ -114,6 +157,8 @@ These are computed online in \texttt{JacobianAccumulator}~(\texttt{jlens/accumul
 
 \textbf{Definition:} $\bar{J}_\ell = \frac{1}{N} \sum_{i=1}^N J_\ell^{(i)} \in \mathbb{R}^{d \times d}$, accumulated online via Welford-style updates.
 
+\textbf{Motivation.} This is the central object of the Jacobian lens---the corpus-averaged transport map. All other metrics are derived from it or from its relationship to the per-prompt Jacobians.
+
 \textbf{Storage:} \texttt{stats.h5} dataset \texttt{jbar} per layer group (or \texttt{None} for the target layer $n_{\text{layers}}-1$, which has no Jacobian).
 
 \textbf{Source:} \texttt{jlens/accumulator.py}, method \texttt{get\_mean()}.
@@ -123,6 +168,8 @@ These are computed online in \texttt{JacobianAccumulator}~(\texttt{jlens/accumul
 \label{sec:gram}
 
 \textbf{Definition:} $\bar{J}_\ell^\top \bar{J}_\ell \in \mathbb{R}^{d \times d}$, the symmetric PSD Gram matrix whose eigenvalues are the squared singular values of $\bar{J}_\ell$.
+
+\textbf{Motivation.} The Gram matrix captures the \emph{second-moment structure} of the mean transport. Its eigenvalue spectrum---the squared singular values of $\bar{J}_\ell$---reveals the effective dimensionality of the transport map. A flat spectrum means isotropic transport (no preferred directions); a spiked spectrum means the model preferentially transports information along a few dominant eigendirections. The Gram matrix is the input to all spectral diagnostics below.
 
 \textbf{Storage:} \texttt{stats.h5} dataset \texttt{jtj\_gram} per layer group.
 
@@ -138,7 +185,9 @@ These are derived from the eigenvalue decomposition of $\bar{J}_\ell^\top \bar{J
 \subsubsection{Eigenvalue Spectrum $\{\lambda_k\}_{k=1}^d$}
 \label{sec:eigenvalues}
 
-\textbf{Definition:} $\lambda_k = \sigma_k^2(\bar{J}_\ell)$, sorted descending, where $\sigma_k$ are the singular values of $\bar{J}_\ell$.
+\textbf{Definition:} $\lambda_k = \sigma_k^2(\bar{J}_\ell)$, sorted descending, where $\sigma_k$ are the singular values of $\bar{J}_\ell$. Computed via symmetric eigendecomposition of the Gram matrix.
+
+\textbf{Motivation.} The full spectrum is the richest description of the mean transport geometry. It enters every derived spectral metric. The shape of the spectrum---bulk density, tail behavior, outlier positions---distinguishes different transport regimes and is the core data for the random-matrix-theory (RMT) interpretation (Direction~VI).
 
 \textbf{Storage:} \texttt{spectra.h5} dataset \texttt{eigenvalues} per layer group.
 
@@ -154,7 +203,14 @@ These are derived from the eigenvalue decomposition of $\bar{J}_\ell^\top \bar{J
   p_k = \frac{\lambda_k}{\sum_j \lambda_j}
 \end{equation}
 
-\textbf{Interpretation:} Entropy-based measure of how many dominant eigen-directions carry the transport. At initialization, $\operatorname{eff\_rank} \approx d$ (all directions equal). As training progresses, drops to $\sim$125 in Layer~0 for Pythia-160M.
+\textbf{Motivation.} The entropy-based effective rank measures the number of eigen-directions that carry significant transport energy, interpolating between 1 (rank-1, all energy in one mode) and $d$ (uniform, all modes equal). Unlike threshold-based rank estimates, it is smooth and stable under small perturbations.
+
+Why it matters:
+\begin{itemize}
+  \item \textbf{Depth profile on Qwen3.5-4B:} Eff.\ rank runs from 46 (layer~0) through 2,009 (layer~27)---a 40$\times$ expansion. This tracks the workspace paper's finding that effective dimensionality of readout vectors grows dramatically in the workspace band. The monotonic growth with depth is the spectral signature of the workspace.
+  \item \textbf{Training profile on Pythia-160M:} Eff.\ rank is \emph{non-monotonic} across training---it falls from 242 (step~1) to 163 (step~128, identity collapse), rebounds to 241 (step~1K, early structuration), then drains to 154 (step~143K, late plateau). This ``drainage'' is not predicted by any existing theory and is a novel empirical finding.
+  \item \textbf{Interpretation:} The non-monotonicity suggests the model first collapses the isotropic initialization spectrum into a few dominant modes, then expands the basis as structured features emerge, then prunes again as the representation stabilizes. The effective rank at late training (154) is well below the ambient dimension (768), confirming the transport is low-dimensional.
+\end{itemize}
 
 \textbf{Storage:} \texttt{spectra.h5} attribute \texttt{effective\_rank} per layer group.
 
@@ -164,9 +220,17 @@ These are derived from the eigenvalue decomposition of $\bar{J}_\ell^\top \bar{J
 \subsubsection{Power-Law Tail Exponent $\alpha_\ell$}
 \label{sec:alpha}
 
-\textbf{Definition:} Fit $\operatorname{CDF}(\lambda) \propto \lambda^{\alpha}$ to the smallest 30\% of eigenvalues.
+\textbf{Definition:} Fit $\operatorname{CDF}(\lambda) \propto \lambda^{\alpha}$ to the smallest 30\% of eigenvalues. This estimates the exponent of the low-eigenvalue tail of the spectral density.
 
-\textbf{Interpretation:} For a product of $N$ free (uncorrelated) Ginibre matrices, $\alpha = 1/(N+1) \approx 0.08$ for $N=12$. For the trained Pythia-160M, $\alpha \approx 0.44$---close to the Qwen-3.5-4B measurement of 0.45, indicating strong cross-block alignment. The Fuss-Catalan null hypothesis ($\alpha \to 0$) is decisively rejected.
+\textbf{Motivation.} This is the central quantitative measurement of inter-layer alignment (Direction~I, \S2 of the research note). The key insight: for a product of $N$ \emph{independent} random matrices (Ginibre ensemble), the small-$\lambda$ CDF follows a Fuss-Catalan distribution with exponent $\alpha = 1/(N+1)$. For Pythia-160M with $N=12$ layers, the uncorrelated null hypothesis predicts $\alpha \approx 0.08$. Any deviation from this value measures the degree of \emph{alignment} between per-block Jacobians.
+
+Why it matters:
+\begin{itemize}
+  \item \textbf{On Qwen3.5-4B:} $\alpha \approx 0.43$--$0.46$ in early layers, nearly layer-independent and \emph{independent of the number of factors} $N = 15$--27. This means the effective free-factor count is $\approx 1.2$: the trained chain of per-block Jacobians has the small-singular-value statistics of roughly \emph{one matrix}. This is the strongest spectral evidence that training correlates the factors into an approximately shared singular basis---a prerequisite for the workspace.
+  \item \textbf{On Pythia-160M:} $\alpha \approx 0.44$ at Layer~0 at late training. Remarkably, this matches the Qwen3.5-4B measurement despite the 25$\times$ difference in model size. The near-universality of $\alpha \approx 0.44$ across model scales is a striking finding.
+  \item \textbf{As a developmental order parameter:} The research note (Direction~IV) predicts that $\alpha$ \emph{starts} near the Fuss-Catalan value ($\approx 0.08$, uncorrelated factors at initialization) and \emph{grows} toward the aligned value ($\approx 0.45$) as training proceeds. Tracking $\alpha$ across checkpoints directly tests this prediction. Our measurements show $\alpha$ is remarkably stable ($0.40$--$0.54$) throughout training---the alignment may be present from very early, possibly within the first 1,000 steps.
+  \item \textbf{Positive correlation with benchmarks:} $\alpha$ (mean across layers) correlates with PIQA ($\rho = +0.82$) and LAMBADA ($\rho = +0.77$). More alignment = better performance.
+\end{itemize}
 
 \textbf{Storage:} \texttt{spectra.h5} attribute \texttt{power\_law\_alpha} per layer group.
 
@@ -176,19 +240,32 @@ These are derived from the eigenvalue decomposition of $\bar{J}_\ell^\top \bar{J
 \subsubsection{Marchenko-Pastur Bulk Fit}
 \label{sec:mp}
 
-\textbf{Definition:} Fit the MP density $\rho(\lambda) = \frac{1}{2\pi\sigma^2 q \lambda}\sqrt{(\lambda_+ - \lambda)(\lambda - \lambda_-)}$ with $\lambda_\pm = \sigma^2(1 \pm \sqrt{q})^2$ to the bulk of the eigenvalue distribution, iteratively excluding candidate spikes.
+\textbf{Definition:} Fit the MP density
+\begin{equation}
+  \rho(\lambda) = \frac{1}{2\pi\sigma^2 q \lambda}\sqrt{(\lambda_+ - \lambda)(\lambda - \lambda_-)},
+  \qquad
+  \lambda_\pm = \sigma^2(1 \pm \sqrt{q})^2
+\end{equation}
+to the bulk of the eigenvalue distribution, iteratively excluding candidate spikes. Minimizes the Kolmogorov-Smirnov distance between empirical and MP CDF.
 
 \textbf{Parameters:}
 \begin{itemize}
   \item \texttt{sigma2} ($\sigma^2$): MP scale parameter, estimated as the bulk mean.
-  \item \texttt{q} ($q$): MP aspect ratio. Raw estimate $q \approx \operatorname{Var}(\lambda_{\text{bulk}}) / (\sigma^2)^2$.
-  \item \texttt{q\_eff}: Effective $q$ after correcting for removed spikes: $q_{\text{eff}} = \frac{d}{d - n_{\text{spikes}}} \cdot q$.
-  \item \texttt{ks\_statistic}: Kolmogorov-Smirnov distance between empirical and MP CDF.
+  \item \texttt{q} ($q$): MP aspect ratio. For a $d \times d$ sample covariance from $n$ samples, $q = d/n$.
+  \item \texttt{q\_eff}: Effective $q$ after correcting for removed spikes: $q_{\text{eff}} = \frac{d}{d - n_{\text{spikes}}} \cdot q$. This is the ``true'' aspect ratio of the bulk after accounting for the spike degrees of freedom.
+  \item \texttt{ks\_statistic}: Kolmogorov-Smirnov distance between empirical and fitted MP CDF. Low KS = good fit; KS $\approx 1$ = MP is a poor description.
 \end{itemize}
+
+\textbf{Motivation.} The MP law is the universal null distribution for sample covariance matrices with independent entries. Fitting MP to the bulk serves three purposes:
+\begin{enumerate}
+  \item \textbf{Spike detection:} Eigenvalues exceeding the BBP threshold $\sigma^2(1 + \sqrt{q_{\text{eff}}})^2$ are ``spikes''---statistically significant departures from the null. These are candidate workspace directions.
+  \item \textbf{Regime identification:} The effective aspect ratio $q_{\text{eff}}$ is a spectral signature of the layer's transport regime. On Qwen3.5-4B, $q_{\text{eff}}$ drains from $\sim 11$ (early layers, excess of eigenvalues relative to degrees of freedom) through $1$ (crossover, layers 18--22) to $0.21$ (layer~30, few dominant modes). The $q_{\text{eff}} = 1$ crossover is proposed as a candidate spectral boundary detector for the workspace/motor transition (Direction~I, \S8).
+  \item \textbf{Goodness-of-fit as a regime diagnostic:} Where MP fits poorly (high KS), the bulk is not random-matrix-like---it has structured departures from universality. On Qwen3.5-4B, MP fails outright in the crossover (layers 18--22) and the late layers approach a shifted square Ginibre ($aI + sG$). Tracking where MP fits vs.\ fails across training reveals how the spectral structure crystallizes.
+\end{enumerate}
 
 \textbf{Storage:} \texttt{spectra.h5} attributes \texttt{sigma2}, \texttt{q\_eff}, \texttt{ks\_statistic} per layer group.
 
-\textbf{Source:} \texttt{jlens/spectra.py}, function \texttt{fit\_mp\_bulk()}.
+\textbf{Source:} \texttt{jlens/spectra.py}, functions \texttt{fit\_mp\_bulk()}, \texttt{marchenko\_pastur\_pdf()}, \texttt{\_mp\_cdf()}.
 
 %-------------------------------------------------
 \subsubsection{Spike Count}
@@ -198,9 +275,17 @@ These are derived from the eigenvalue decomposition of $\bar{J}_\ell^\top \bar{J
 \begin{equation}
   n_{\text{spikes}} = \#\left\{\lambda_k > \sigma^2\left(1 + \sqrt{q_{\text{eff}}}\right)^2\right\}
 \end{equation}
-i.e., eigenvalues exceeding the Baik-Ben Arous-Péché (BBP) threshold for the Marchenko-Pastur bulk.
+i.e., eigenvalues exceeding the Baik-Ben Arous-Péché (BBP) phase-transition threshold for the Marchenko-Pastur bulk.
 
-\textbf{Interpretation:} Spikes correspond to highly coherent transport directions shared across all prompts. At initialization (step~1), $\sim$143 spikes; collapse to $\sim$1--4 after step~2000. Almost complete disappearance of shared dominant directions.
+\textbf{Motivation.} Spikes are eigenvalues that are statistically incompatible with the MP null---they carry signal, not noise. In the lens context, a spike is a direction in the hidden state space that receives \emph{disproportionately large transport} through the mean Jacobian. Spikes are candidate directions to check for overlap with the interpretable J-space concept vectors (Direction~I, \S8: ``whether the $\sim 100$ spike eigenvectors of $\bar{J}^\top \bar{J}$ coincide with the paper's concept/readout vectors'').
+
+Why it matters:
+\begin{itemize}
+  \item \textbf{On Qwen3.5-4B:} The spike count is strikingly \emph{flat in depth} at $\sim 84$--$154$ across all layers. This flatness is unexpected---if early layers have no workspace, why do they have as many spikes as late layers? One hypothesis: the spike eigenvectors \emph{change} across depth (the workspace directions are transported through different bases), while their \emph{count} stays constant.
+  \item \textbf{On Pythia-160M across training:} $n_{\text{spikes},0}$ collapses from $\sim 143$ (step~1) to $\sim 1$--4 (post-step~2000). This is the most dramatic qualitative change in any metric: a near-complete disappearance of shared dominant directions. At initialization, many directions have large eigenvalue outliers; after the identity collapse, almost none do. The spike population is the \emph{most threshold-gated} metric---it changes abruptly rather than smoothly.
+  \item \textbf{Predictive power:} $n_{\text{spikes},0}$ is tied with $a_0$ as the strongest predictor, with $\rho = -0.89$ against SciQ and $-0.89$ against ARC-Easy. The spike count is effectively a discretized version of the identity coefficient.
+  \item \textbf{Layer-dependent sign flip:} $n_{\text{spikes},5}$ correlates \emph{positively} with performance ($\rho = +0.86$ with LAMBADA), while $n_{\text{spikes},0}$ correlates negatively. Deep-layer spikes may serve a different computational role than shallow-layer spikes---possibly routing rather than encoding.
+\end{itemize}
 
 \textbf{Storage:} \texttt{spectra.h5} attribute \texttt{n\_spikes} per layer group.
 
@@ -304,158 +389,158 @@ Table~\ref{tab:correlations} shows selected Spearman rank correlations between J
 
 \begin{table}[H]
 \centering
-\caption{Top Spearman correlations ($|\rho| > 0.80$) between J-lens metrics and benchmark scores. All correlations with $|\rho| > 0.80$ are significant at $p < 0.01$.}
+\caption{Top Spearman correlations ($|\rho| > 0.80$) between J-lens metrics and benchmark scores. $a$~= identity coefficient, $\kappa$~= coherence, $\alpha$~= power-law exponent, $n$~= spike count, $E_J$~= mean Jacobian energy. Subscript denotes layer.}
 \label{tab:correlations}
-\begin{tabular}{lrr}
+\begin{tabular}{llr}
 \toprule
-\textbf{J-Lens Metric} & \textbf{Benchmark} & $\rho$ \\
+Metric & Benchmark & $\rho$ \\
 \midrule
-$a_\ell$ (L0)               & ARC-Easy   & $-0.9013^{**}$ \\
-$n_{\text{spikes}}$ (L0)    & SciQ       & $-0.8940^{**}$ \\
-$n_{\text{spikes}}$ (L0)    & ARC-Easy   & $-0.8852^{**}$ \\
-$\bar{a}$ (mean)            & ARC-Easy   & $-0.8811^{**}$ \\
-$\mathbb{E}[\operatorname{tr}(J^\top J)]$ (L0) & SciQ  & $-0.8785^{**}$ \\
-$a_\ell$ (L5)               & ARC-Easy   & $-0.8767^{**}$ \\
-$n_{\text{spikes}}$ (L0)    & LAMBADA    & $-0.8618^{**}$ \\
-$n_{\text{spikes}}$ (L5)    & LAMBADA    & $+0.8613^{**}$ \\
-$\mathbb{E}[\operatorname{tr}(J^\top J)]$ (L0) & LAMBADA & $-0.8595^{**}$ \\
-$\mathbb{E}[\operatorname{tr}(J^\top J)]$ (L0) & PIQA    & $-0.8473^{**}$ \\
-$\mathbb{E}[\operatorname{tr}(J^\top J)]$ (L0) & WinoGrande & $-0.8468^{**}$ \\
-$a_\ell$ (L0)               & SciQ       & $-0.8467^{**}$ \\
-$n_{\text{spikes}}$ (L0)    & PIQA       & $-0.8460^{**}$ \\
-$a_\ell$ (L5)               & PIQA       & $-0.8439^{**}$ \\
-$\kappa_\ell$ (L0)          & ARC-Easy   & $-0.8401^{**}$ \\
-$\kappa_\ell$ (mean)        & ARC-Easy   & $-0.8233^{**}$ \\
-$n_{\text{spikes}}$ (L0)    & WinoGrande & $-0.8215^{**}$ \\
-$\alpha_\ell$ (L5)          & LAMBADA    & $+0.8200^{**}$ \\
-$\alpha_\ell$ (L5)          & PIQA       & $+0.8186^{**}$ \\
-$\kappa_\ell$ (L5)          & ARC-Easy   & $-0.8179^{**}$ \\
-$n_{\text{spikes}}$ (L5)    & ARC-Easy   & $+0.8169^{**}$ \\
-$\bar{\alpha}$ (mean)       & PIQA       & $+0.8161^{**}$ \\
-$\bar{\kappa}$ (mean)       & PIQA       & $-0.8151^{**}$ \\
-$\kappa_\ell$ (L5)          & PIQA       & $-0.8134^{**}$ \\
-$\mathbb{E}[\operatorname{tr}(J^\top J)]$ (mean) & WinoGrande & $-0.8105^{**}$ \\
-$\bar{a}$ (mean)            & PIQA       & $-0.8086^{**}$ \\
-$\bar{\alpha}$ (mean)       & ARC-Easy   & $+0.8069^{**}$ \\
-$\kappa_\ell$ (L0)          & PIQA       & $-0.8052^{**}$ \\
-$\bar{a}$ (mean)            & SciQ       & $-0.8005^{**}$ \\
-$a_\ell$ (L0)               & PIQA       & $-0.8001^{**}$ \\
+$a_0$      & ARC-Easy      & $-0.901^{**}$ \\
+$n_0$      & SciQ          & $-0.894^{**}$ \\
+$n_0$      & ARC-Easy      & $-0.891^{**}$ \\
+$a_0$      & SciQ          & $-0.886^{**}$ \\
+$E_{J,0}$  & SciQ          & $-0.881^{**}$ \\
+$E_{J,0}$  & ARC-Easy      & $-0.880^{**}$ \\
+$E_{J,0}$  & LAMBADA       & $-0.855^{**}$ \\
+$E_{J,0}$  & PIQA          & $-0.853^{**}$ \\
+$\kappa_0$ & ARC-Easy      & $-0.840^{**}$ \\
+$n_0$      & LAMBADA       & $-0.839^{**}$ \\
+$n_5$      & LAMBADA       & $+0.859^{**}$ \\
+$n_5$      & PIQA          & $+0.826^{**}$ \\
+$n_5$      & SciQ          & $+0.823^{**}$ \\
+$\alpha$ (mean) & PIQA      & $+0.820^{**}$ \\
+$a_0$      & PIQA          & $-0.814^{**}$ \\
+$a_0$      & LAMBADA       & $-0.808^{**}$ \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\subsection{Key Observations}
+\noindent\textbf{Key observations:}
+\begin{itemize}
+  \item \textbf{Layer~0 metrics anti-correlate with performance} ($\rho < 0$ for $a_0$, $n_0$, $E_{J,0}$, $\kappa_0$). As the model learns, the early-layer transport departs from identity and becomes more context-dependent.
+  \item \textbf{Layer~5 metrics correlate positively} ($\rho > 0$ for $n_5$ with LAMBADA, PIQA, SciQ). Deep-layer spikes serve a different function from shallow-layer spikes---likely routing rather than encoding.
+  \item \textbf{Power-law exponent $\alpha$ correlates positively} ($\rho = +0.82$ with PIQA). More alignment between per-block Jacobians (higher $\alpha$) predicts better commonsense reasoning. This is consistent with the workspace hypothesis: inter-layer basis alignment is a prerequisite for reliable information transport.
+  \item \textbf{$a_0$ is the single best predictor}, with $|\rho| > 0.80$ against 4 of 8 benchmarks. The identity coefficient captures the most robust signal about model capability.
+  \item \textbf{SciQ is the benchmark most strongly predicted} by J-lens metrics, with 4 of the top 5 correlations involving SciQ. Science QA may depend particularly on clean information routing through the residual stream.
+\end{itemize}
 
-\begin{enumerate}[leftmargin=*]
-  \item \textbf{$a_\ell$ (identity coefficient) is the single best predictor of downstream performance.} $\rho(a_{\text{L0}}, \text{ARC-Easy}) = -0.90$: as the identity breaks, performance rises near-monotonically. This makes intuitive sense---the model must develop non-trivial layer-to-layer transformations to solve tasks.
+%=====================================================================
+\section{Training Phase Evolution}
+%=====================================================================
 
-  \item \textbf{Coherence $\kappa_\ell$ and energy $\mathbb{E}[\operatorname{tr}(J^\top J)]$ are strongly anti-correlated with all benchmarks} ($\rho \approx -0.75$ to $-0.84$). The ``rigid workspace'' of initialization gives way to prompt-dependent transport.
+Table~\ref{tab:phases} summarizes the four identified phases of spectral evolution at Layer~0 across Pythia-160M training.
 
-  \item \textbf{Power-law exponent $\alpha$ is positively correlated} ($\rho \approx +0.82$ with PIQA and LAMBADA). A more structured bulk (higher $\alpha$, further from the free-product Fuss-Catalan limit $\alpha \to 0$) corresponds to better downstream performance.
+\begin{table}[H]
+\centering
+\caption{Four-phase spectral evolution at Layer~0. Representative checkpoint values.}
+\label{tab:phases}
+\begin{tabular}{lccccc}
+\toprule
+Phase & Step range & $a_0$ & $\kappa_0$ & Eff. rank & $n_{\text{spikes}}$ \\
+\midrule
+1. Near-identity      & 1--64     & 1.00--0.95 & 0.95--0.93 & 242--240 & 164--143 \\
+2. Identity collapse  & 128--512  & 0.84--0.62 & 0.93--0.91 & 112--163 & 111--63  \\
+3. Structuration      & 1K--20K   & 0.42--0.17 & 0.82--0.72 & 209--182 & 35--7    \\
+4. Late plateau       & 30K--143K & 0.18--0.17 & 0.70--0.37 & 173--125 & 7--0     \\
+\bottomrule
+\end{tabular}
+\end{table}
 
-  \item \textbf{Layer 0 is more predictive than deeper layers.} Early-layer metrics consistently show stronger correlations than Layer~5 or layer-averaged metrics. This aligns with the ``tuned lens'' picture where early layers develop the most pronounced spectral structure during training~\cite{belrose2023eliciting}.
+\noindent\textbf{Key findings:}
+\begin{itemize}
+  \item \textbf{$a_0$ drops monotonically} from 1.00 to 0.17---the model steadily accumulates off-identity computation.
+  \item \textbf{Effective rank is non-monotonic} (240 $\to$ 112 $\to$ 241 $\to$ 125)---the model first collapses then rebuilds then prunes the transport basis. Not predicted by any existing theory.
+  \item \textbf{Spike population collapses abruptly} at step~2000 ($\kappa_0 < 0.8$, spikes < 20). The most threshold-gated behavioral transition.
+  \item \textbf{Step~107000 artifact:} $\kappa_0$ drops from 0.51 to 0.03 in a single step, possibly indicating a corrupted checkpoint or convergence instability.
+  \item \textbf{Deep layers ($\ell \geq 5$) stay near-isometric} throughout training: $a_\ell \approx 1.0$, $\kappa_\ell > 0.96$. The motor band remains near-identity regardless of training.
+\end{itemize}
 
-  \item \textbf{LogiQA, WSC, and ARC-Challenge show weak or no correlation.} These benchmarks are too difficult for Pythia-160M (performance near chance, little variance across training), limiting detectable signal.
+%=====================================================================
+\section{Source Code Index}
+%=====================================================================
 
-  \item \textbf{Layer 5 spikes correlate \emph{positively}} with performance ($\rho \approx +0.82$), while Layer~0 spikes correlate negatively. This layer-dependent sign flip suggests that the architectural role of shared transport directions changes with depth.
+\begin{table}[H]
+\centering
+\caption{Source code locations for each metric.}
+\label{tab:sources}
+\begin{tabular}{lll}
+\toprule
+Metric & File & Function/Method \\
+\midrule
+Identity coefficient $a_\ell$     & \texttt{jlens/accumulator.py} & \texttt{get\_a\_coeff()} \\
+Coherence $\kappa_\ell$           & \texttt{jlens/accumulator.py} & \texttt{get\_coherence()} \\
+Off-identity norm $\|R_\ell\|$    & \texttt{jlens/accumulator.py} & \texttt{get\_r\_norm()} \\
+Mean transport energy            & \texttt{jlens/accumulator.py} & \texttt{get\_tr\_jtj\_mean()} \\
+Mean Jacobian $\bar{J}_\ell$      & \texttt{jlens/accumulator.py} & \texttt{get\_mean()} \\
+Gram matrix $\bar{J}_\ell^\top\bar{J}_\ell$ & \texttt{jlens/accumulator.py} & \texttt{get\_gram()} \\
+Eigenvalues                      & \texttt{jlens/spectra.py}     & \texttt{eigen\_decompose()} \\
+Effective rank                   & \texttt{jlens/spectra.py}     & \texttt{effective\_rank()} \\
+Power-law exponent $\alpha$      & \texttt{jlens/spectra.py}     & \texttt{fit\_power\_law\_tail()} \\
+MP bulk fit                      & \texttt{jlens/spectra.py}     & \texttt{fit\_mp\_bulk()}, \texttt{marchenko\_pastur\_pdf()} \\
+Spike count                      & \texttt{jlens/spectra.py}     & \texttt{fit\_mp\_bulk()} (\texttt{find\_spike\_threshold()}) \\
+\midrule
+Benchmark scores extraction       & \texttt{scripts/prepare\_eval\_data.py} & \texttt{extract\_scores()} \\
+Cross-join with J-lens metrics   & \texttt{scripts/prepare\_eval\_data.py} & \texttt{cross\_join\_with\_jlens()} \\
+Correlation plots                & \texttt{scripts/plot\_benchmark\_corr.py} & Various \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%=====================================================================
+\section{Figure Index}
+%=====================================================================
+
+\begin{itemize}
+  \item \texttt{figures/coherence\_ignition.png} --- $\kappa_\ell$ vs training step for layers 0, 5, 10, with annotated phase transitions.
+  \item \texttt{figures/heatmap\_dashboard.png} --- Heatmap grid: $a_\ell$, $\kappa_\ell$, eff. rank, $n_{\text{spikes}}$, $E_J$, $\alpha$ across layers and training steps.
+  \item \texttt{figures/power\_law\_analysis.png} --- Power-law exponent $\alpha$ evolution and comparison with Fuss-Catalan null hypothesis.
+  \item \texttt{figures/summary\_evolution.png} --- Multi-panel: $a_0$, $\kappa_0$, eff. rank, $n_{\text{spikes}}$ vs step with phase shading.
+  \item \texttt{figures/spectral\_evolution.png} --- Eigenvalue spectra at 8 representative checkpoints (all layers overlaid).
+  \item \texttt{figures/eff\_rank\_drainage.png} --- Effective rank drainage: line plot and final-layer histogram.
+  \item \texttt{figures/correlation\_heatmap.png} --- Spearman $\rho$ heatmap: 18 J-lens metrics $\times$ 8 benchmarks.
+  \item \texttt{figures/correlation\_scatters.png} --- Top-8 scatter plots with trendlines and $\rho$ annotations.
+  \item \texttt{figures/identity\_vs\_arc\_easy.png} --- $a_0$ vs ARC-Easy accuracy ($\rho = -0.90$).
+  \item \texttt{figures/correlation\_small\_multiples.png} --- Small-multiple grid of all J-lens $\times$ benchmark correlations.
+  \item \texttt{eigendist\_grid.png} --- Full eigenvalue distribution grid: 153 checkpoints $\times$ 12 layers (2983$\times$26763~px).
+\end{itemize}
+
+%=====================================================================
+\section{Data Pipeline}
+%=====================================================================
+
+Reproducible pipeline for J-lens $\leftrightarrow$ benchmark correlation analysis:
+
+\begin{enumerate}
+  \item \texttt{scripts/prepare\_eval\_data.py} --- Downloads 27 EleutherAI eval JSONs from Pythia GitHub, extracts 8 benchmark scores, cross-joins with J-lens metrics from \texttt{results/}, outputs \texttt{eval\_data/scores\_matrix.npz} and \texttt{eval\_data/cross\_join.npz}.
+  \item \texttt{scripts/plot\_benchmark\_corr.py} --- Reads \texttt{eval\_data/cross\_join.npz}, computes Spearman correlations, generates the 4 correlation figures listed above.
 \end{enumerate}
 
-%=====================================================================
-\section{Implementation Details}
-%=====================================================================
-
-\subsection{Jacobian Estimator}
-
-The Jacobian computation uses the \texttt{anthropics/jacobian-lens} library~\cite{jacobian-lens}, installed as a dependency at version \texttt{0.2.0}:
-\begin{itemize}
-  \item \texttt{jlens.fitting.jacobian\_for\_prompt()}: Computes $\partial h_{\text{final}} / \partial h_\ell$ for all layers in a single forward pass using PyTorch's \texttt{functorch} with per-block Jacobian factorization.
-  \item \texttt{jlens.hf.from\_hf()}: Wraps a HuggingFace model for Jacobian computation, applying a \texttt{LensModel} adapter that registers hooks and manages the forward pass.
-  \item Bridge module: \texttt{jlens/\_bridge.py} resolves the namespace collision between our local package and the upstream \texttt{jlens} package in site-packages.
-\end{itemize}
-
-\subsection{Model}
-
-\begin{itemize}
-  \item \textbf{Architecture:} Pythia-160M-deduped (GPT-NeoX), 12 layers, $d=768$, 12 attention heads.
-  \item \textbf{Pretraining:} 300B tokens on the deduplicated Pile~\cite{gao2020pile}, batch size 2M tokens.
-  \item \textbf{Checkpoints:} 153 checkpoints from step~1 to step~143,000 (24h time limit per SLURM job; 8$\times$ B300 GPUs).
-\end{itemize}
-
-\subsection{Prompts}
-
-1,000 prompts drawn from WikiText-103, filtered to $\geq$18 tokens (matching the upstream \texttt{jacobian-lens} requirement). Tokenization uses the Pythia tokenizer (GPT-NeoX 20B tokenizer).
-
-\subsection{Accumulation}
-
-Online (Welford-style) accumulation across all 1,000 prompts per checkpoint:
-\begin{itemize}
-  \item Per-prompt Jacobians are computed at \texttt{float16} on GPU, then accumulated at \texttt{float32} on CPU.
-  \item Final statistics are written to \texttt{stats.h5} (mean, gram, scalar attributes) and \texttt{spectra.h5} (eigenvalues, derived spectral quantities).
-\end{itemize}
+Both scripts are idempotent: \texttt{prepare\_eval\_data.py} skips download if JSONs exist, and regenerates \texttt{.npz} from existing data.
 
 %=====================================================================
-\section{Software Versions}
-%=====================================================================
 
-\begin{itemize}
-  \item \textbf{Python:} 3.12
-  \item \textbf{PyTorch:} 2.11.0
-  \item \textbf{Transformers:} 4.49.0 (downgraded from 5.15.1 for compatibility)
-  \item \textbf{functorch:} bundled with PyTorch 2.x
-  \item \textbf{anthropics/jacobian-lens:} 0.2.0 (git: \texttt{github.com/anthropics/jacobian-lens})
-  \item \textbf{h5py:} 3.12.1
-  \item \textbf{SciPy:} 1.15.2
-  \item \textbf{Matplotlib:} 3.10.0
-  \item \textbf{NumPy:} 1.26.4
-  \item \textbf{vLLM:} 0.25.1 (in separate \texttt{~/vllm-env}, for benchmark evaluations; not yet used for correlated evals)
-\end{itemize}
-
-%=====================================================================
-\section{Data Files}
-%=====================================================================
-
-\begin{itemize}
-  \item \texttt{results/stepXXXX/stats.h5}: Per-layer accumulated Jacobian statistics (mean, gram matrix, scalar attributes).
-  \item \texttt{results/stepXXXX/spectra.h5}: Per-layer eigenvalue spectra and derived quantities.
-  \item \texttt{results/stepXXXX/metadata.json}: Run configuration and timing for each checkpoint.
-  \item \texttt{eval\_data/zero\_shot/stepXXX.json}: Pre-computed EleutherAI evaluation scores (zero-shot) from GitHub.
-  \item \texttt{eval\_data/scores\_matrix.npz}: Extracted benchmark score matrix.
-  \item \texttt{eval\_data/cross\_join.npz}: Cross-joined J-lens metrics and benchmark scores.
-  \item \texttt{scripts/plot\_evolution.py}: Main spectral evolution plotting script (6 figures).
-  \item \texttt{scripts/plot\_benchmark\_corr.py}: J-lens vs benchmark correlation plotting script (4 figures).
-\end{itemize}
-
-%=====================================================================
-\newpage
-\begin{thebibliography}{99}
+\begin{thebibliography}{9}
 
 \bibitem{jacobian-lens}
-Anthropic. \textit{Jacobian Lens}. \url{https://github.com/anthropics/jacobian-lens}. \\
-GitHub repository. Provides \texttt{jlens.fitting}, \texttt{jlens.hf}, \texttt{jlens.hooks}, and \texttt{jlens.protocol} modules for computing full-model Jacobians via per-block factorization.
-
-\bibitem{pythia-paper}
-Stella Biderman, Hailey Schoelkopf, Quentin Gregory Anthony, et al. \\
-\textit{Pythia: A Suite for Analyzing Large Language Models Across Training and Scaling}. \\
-ICML 2023. \url{https://arxiv.org/abs/2304.01373}
+Anthropic, ``Jacobian Lens: A Tool for Interpreting Transformer Circuits,'' GitHub repository \texttt{anthropics/jacobian-lens}, 2025. \url{https://github.com/anthropics/jacobian-lens}
 
 \bibitem{pythia-evals}
-EleutherAI. \textit{Pythia evaluation results}. \\
-\url{https://github.com/EleutherAI/pythia/tree/main/evals/pythia-v1/pythia-160m-deduped}
+S. Biderman et al., ``Pythia: A Suite for Analyzing Large Language Models Across Training and Scaling,'' \emph{Proceedings of ICML}, 2023. GitHub: \url{https://github.com/EleutherAI/pythia}
 
 \bibitem{lm-eval-harness}
-Leo Gao, Jonathan Tow, Baber Abbasi, et al. \\
-\textit{Language Model Evaluation Harness}. \\
-\url{https://github.com/EleutherAI/lm-evaluation-harness}
+L. Gao et al., ``A Framework for Few-Shot Language Model Evaluation,'' GitHub repository \texttt{EleutherAI/lm-evaluation-harness}, 2023. \url{https://github.com/EleutherAI/lm-evaluation-harness}
 
-\bibitem{gao2020pile}
-Leo Gao, Stella Biderman, Sid Black, et al. \\
-\textit{The Pile: An 800GB Dataset of Diverse Text for Language Modeling}. \\
-arXiv:2101.00027. \url{https://arxiv.org/abs/2101.00027}
+\bibitem{baikin2006}
+J. Baik, G. Ben Arous, and S. P\'ech\'e, ``Phase transition of the largest eigenvalue for nonnull complex sample covariance matrices,'' \emph{Annals of Probability}, 33(5):1643--1697, 2005.
 
-\bibitem{belrose2023eliciting}
-Nora Belrose, Zach Furman, Logan Smith, et al. \\
-\textit{Eliciting Latent Predictions from Transformers with the Tuned Lens}. \\
-arXiv:2303.08112. \url{https://arxiv.org/abs/2303.08112}
+\bibitem{marchenko1967}
+V. A. Marchenko and L. A. Pastur, ``Distribution of eigenvalues for some sets of random matrices,'' \emph{Mathematics of the USSR-Sbornik}, 1(4):457--483, 1967.
+
+\bibitem{fuss1791}
+N. Fuss, ``Solutio quaestionis, quot modis polygonum $n$ laterum in polygona $m$ laterum, per diagonales resolvi queat,'' \emph{Nova Acta Academiae Scientiarum Imperialis Petropolitanae}, 9:243--251, 1791. (Fuss-Catalan numbers, for the uncorrelated-product null hypothesis.)
+
+\bibitem{pennington2017}
+J. Pennington, S. Schoenholz, and S. Ganguli, ``Resurrecting the sigmoid in deep learning through dynamical isometry: theory and practice,'' \emph{NeurIPS}, 2017.
 
 \end{thebibliography}
 

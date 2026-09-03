@@ -27,7 +27,6 @@ and power-law exponent $\alpha$ are also strongly predictive ($|\rho| > 0.80$).
 ## Requirements
 
 - Python ≥ 3.12
-- CUDA GPU (tested on NVIDIA B300, 275 GB)
 - [uv](https://docs.astral.sh/uv/) for package management
 
 ## Quick Start
