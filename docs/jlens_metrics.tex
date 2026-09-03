@@ -1,0 +1,462 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage[margin=1in]{geometry}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{float}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    urlcolor=cyan,
+    citecolor=blue
+}
+
+\title{\textbf{J-Lens \& Pythia-160M: Metric Dictionary}\\
+\large Spectral Analysis of the Jacobian Workspace Across Training}
+\author{}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This document catalogs every J-lens metric computed from the Jacobian lens $\bar{J}_\ell = \mathbb{E}[\partial h_{\text{final}} / \partial h_\ell]$ applied to Pythia-160M-deduped across 153 pretraining checkpoints, alongside the benchmark evaluation scores used for correlation analysis. Each entry includes the mathematical definition, computational provenance, and source code location.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%=====================================================================
+\section{J-Lens Metrics}
+%=====================================================================
+
+All J-lens metrics are derived from the \textbf{mean Jacobian} $\bar{J}_\ell \in \mathbb{R}^{d \times d}$, computed empirically across $N$ prompts:
+\begin{equation}
+  \bar{J}_\ell = \frac{1}{N} \sum_{i=1}^{N} \frac{\partial h_{\text{final}}^{(i)}}{\partial h_\ell^{(i)}}
+\end{equation}
+where $h_\ell \in \mathbb{R}^d$ is the hidden state at layer $\ell$ after the residual stream update, and $h_{\text{final}}$ is the final-layer hidden state. The Jacobian estimator used is from \texttt{anthropics/jacobian-lens}~\cite{jacobian-lens}, which computes per-prompt Jacobians via efficient forward-mode differentiation with \texttt{functorch} and per-block factorization for memory efficiency.
+
+\subsection{Primary Accumulated Metrics}
+
+These are computed online in \texttt{JacobianAccumulator}~(\texttt{jlens/accumulator.py}) and stored in \texttt{results/stepXXXX/stats.h5} per layer.
+
+%-------------------------------------------------
+\subsubsection{Identity Coefficient $a_\ell$}
+\label{sec:a_coeff}
+
+\textbf{Definition:}
+\begin{equation}
+  a_\ell = \frac{\operatorname{tr}(\bar{J}_\ell)}{d}
+\end{equation}
+
+\textbf{Interpretation:} Decompose $\bar{J}_\ell = a_\ell I + R_\ell$, where $R_\ell$ is the off-identity residual. $a_\ell = 1$ when $\bar{J}_\ell \approx I$ (near-initialization), and $a_\ell \to 0$ as the model develops non-trivial layer-to-layer transformations. This is the primary diagnostic for the ``identity collapse'' phase of training.
+
+\textbf{Storage:} \texttt{stats.h5} attribute \texttt{a\_coeff} per layer group.
+
+\textbf{Source:} \texttt{jlens/accumulator.py}, method \texttt{get\_a\_coeff()}.
+
+%-------------------------------------------------
+\subsubsection{Transport Coherence $\kappa_\ell$}
+\label{sec:coherence}
+
+\textbf{Definition:}
+\begin{equation}
+  \kappa_\ell = \frac{\operatorname{tr}(\bar{J}_\ell^\top \bar{J}_\ell)}{\mathbb{E}_i\left[\operatorname{tr}\!\big(J^{(i)\top}_\ell J^{(i)}_\ell\big)\right]}
+  = \frac{\|\bar{J}_\ell\|_F^2}{\mathbb{E}\big[\|J_\ell\|_F^2\big]}
+\end{equation}
+
+\textbf{Interpretation:} The fraction of the per-prompt Jacobian energy that is captured by the mean. $\kappa_\ell \approx 1$ means all prompts share the same linear transport map (the ``workspace'' is rigid). $\kappa_\ell \ll 1$ means the map is highly prompt-dependent. Falls from $\sim$0.94 to $\sim$0.39 in Layer~0 across training.
+
+\textbf{Storage:} \texttt{stats.h5} attribute \texttt{coherence} per layer group.
+
+\textbf{Source:} \texttt{jlens/accumulator.py}, method \texttt{get\_coherence()}.
+
+%-------------------------------------------------
+\subsubsection{Off-Identity Norm $\|R_\ell\|$}
+\label{sec:r_norm}
+
+\textbf{Definition:}
+\begin{equation}
+  \|R_\ell\| = \frac{1}{\sqrt{d}}\left\|\bar{J}_\ell - a_\ell I\right\|_F
+\end{equation}
+
+\textbf{Interpretation:} The Frobenius norm of the residual after subtracting the scalar identity component, normalized by $\sqrt{d}$ to make it comparable across model sizes. Grows as the model learns structured off-diagonal transport.
+
+\textbf{Storage:} \texttt{stats.h5} attribute \texttt{r\_norm} per layer group.
+
+\textbf{Source:} \texttt{jlens/accumulator.py}, method \texttt{get\_r\_norm()}.
+
+%-------------------------------------------------
+\subsubsection{Mean Transport Energy $\mathbb{E}[\operatorname{tr}(J_\ell^\top J_\ell)]$}
+\label{sec:tr_jtj}
+
+\textbf{Definition:}
+\begin{equation}
+  \mathbb{E}\!\left[\operatorname{tr}\!\big(J_\ell^\top J_\ell\big)\right]
+  = \frac{1}{N} \sum_{i=1}^{N} \|J_\ell^{(i)}\|_F^2
+\end{equation}
+
+\textbf{Interpretation:} The average squared Frobenius norm of per-prompt Jacobians. Measures the total ``energy'' of the transport map. Decreases from $\sim$8500 to $\sim$1000 in Layer~0, reflecting the shrinkage of the Jacobian as the model organizes.
+
+\textbf{Storage:} \texttt{stats.h5} attribute \texttt{tr\_jtj\_mean} per layer group.
+
+\textbf{Source:} \texttt{jlens/accumulator.py}, method \texttt{get\_tr\_jtj\_mean()}.
+
+%-------------------------------------------------
+\subsubsection{Mean Jacobian $\bar{J}_\ell$ (matrix)}
+\label{sec:jbar}
+
+\textbf{Definition:} $\bar{J}_\ell = \frac{1}{N} \sum_{i=1}^N J_\ell^{(i)} \in \mathbb{R}^{d \times d}$, accumulated online via Welford-style updates.
+
+\textbf{Storage:} \texttt{stats.h5} dataset \texttt{jbar} per layer group (or \texttt{None} for the target layer $n_{\text{layers}}-1$, which has no Jacobian).
+
+\textbf{Source:} \texttt{jlens/accumulator.py}, method \texttt{get\_mean()}.
+
+%-------------------------------------------------
+\subsubsection{Gram Matrix $\bar{J}_\ell^\top \bar{J}_\ell$}
+\label{sec:gram}
+
+\textbf{Definition:} $\bar{J}_\ell^\top \bar{J}_\ell \in \mathbb{R}^{d \times d}$, the symmetric PSD Gram matrix whose eigenvalues are the squared singular values of $\bar{J}_\ell$.
+
+\textbf{Storage:} \texttt{stats.h5} dataset \texttt{jtj\_gram} per layer group.
+
+\textbf{Source:} \texttt{jlens/accumulator.py}, method \texttt{get\_gram()}.
+
+%=====================================================================
+\subsection{Spectral Metrics}
+%=====================================================================
+
+These are derived from the eigenvalue decomposition of $\bar{J}_\ell^\top \bar{J}_\ell$ and stored in \texttt{results/stepXXXX/spectra.h5}.
+
+%-------------------------------------------------
+\subsubsection{Eigenvalue Spectrum $\{\lambda_k\}_{k=1}^d$}
+\label{sec:eigenvalues}
+
+\textbf{Definition:} $\lambda_k = \sigma_k^2(\bar{J}_\ell)$, sorted descending, where $\sigma_k$ are the singular values of $\bar{J}_\ell$.
+
+\textbf{Storage:} \texttt{spectra.h5} dataset \texttt{eigenvalues} per layer group.
+
+\textbf{Source:} \texttt{jlens/spectra.py}, function \texttt{eigen\_decompose()}.
+
+%-------------------------------------------------
+\subsubsection{Effective Rank}
+\label{sec:eff_rank}
+
+\textbf{Definition:}
+\begin{equation}
+  \operatorname{eff\_rank}_\ell = \exp\!\left(-\sum_{k=1}^d p_k \ln p_k\right), \quad
+  p_k = \frac{\lambda_k}{\sum_j \lambda_j}
+\end{equation}
+
+\textbf{Interpretation:} Entropy-based measure of how many dominant eigen-directions carry the transport. At initialization, $\operatorname{eff\_rank} \approx d$ (all directions equal). As training progresses, drops to $\sim$125 in Layer~0 for Pythia-160M.
+
+\textbf{Storage:} \texttt{spectra.h5} attribute \texttt{effective\_rank} per layer group.
+
+\textbf{Source:} \texttt{jlens/spectra.py}, function \texttt{effective\_rank()}.
+
+%-------------------------------------------------
+\subsubsection{Power-Law Tail Exponent $\alpha_\ell$}
+\label{sec:alpha}
+
+\textbf{Definition:} Fit $\operatorname{CDF}(\lambda) \propto \lambda^{\alpha}$ to the smallest 30\% of eigenvalues.
+
+\textbf{Interpretation:} For a product of $N$ free (uncorrelated) Ginibre matrices, $\alpha = 1/(N+1) \approx 0.08$ for $N=12$. For the trained Pythia-160M, $\alpha \approx 0.44$---close to the Qwen-3.5-4B measurement of 0.45, indicating strong cross-block alignment. The Fuss-Catalan null hypothesis ($\alpha \to 0$) is decisively rejected.
+
+\textbf{Storage:} \texttt{spectra.h5} attribute \texttt{power\_law\_alpha} per layer group.
+
+\textbf{Source:} \texttt{jlens/spectra.py}, function \texttt{fit\_power\_law\_tail()}.
+
+%-------------------------------------------------
+\subsubsection{Marchenko-Pastur Bulk Fit}
+\label{sec:mp}
+
+\textbf{Definition:} Fit the MP density $\rho(\lambda) = \frac{1}{2\pi\sigma^2 q \lambda}\sqrt{(\lambda_+ - \lambda)(\lambda - \lambda_-)}$ with $\lambda_\pm = \sigma^2(1 \pm \sqrt{q})^2$ to the bulk of the eigenvalue distribution, iteratively excluding candidate spikes.
+
+\textbf{Parameters:}
+\begin{itemize}
+  \item \texttt{sigma2} ($\sigma^2$): MP scale parameter, estimated as the bulk mean.
+  \item \texttt{q} ($q$): MP aspect ratio. Raw estimate $q \approx \operatorname{Var}(\lambda_{\text{bulk}}) / (\sigma^2)^2$.
+  \item \texttt{q\_eff}: Effective $q$ after correcting for removed spikes: $q_{\text{eff}} = \frac{d}{d - n_{\text{spikes}}} \cdot q$.
+  \item \texttt{ks\_statistic}: Kolmogorov-Smirnov distance between empirical and MP CDF.
+\end{itemize}
+
+\textbf{Storage:} \texttt{spectra.h5} attributes \texttt{sigma2}, \texttt{q\_eff}, \texttt{ks\_statistic} per layer group.
+
+\textbf{Source:} \texttt{jlens/spectra.py}, function \texttt{fit\_mp\_bulk()}.
+
+%-------------------------------------------------
+\subsubsection{Spike Count}
+\label{sec:spikes}
+
+\textbf{Definition:} 
+\begin{equation}
+  n_{\text{spikes}} = \#\left\{\lambda_k > \sigma^2\left(1 + \sqrt{q_{\text{eff}}}\right)^2\right\}
+\end{equation}
+i.e., eigenvalues exceeding the Baik-Ben Arous-Péché (BBP) threshold for the Marchenko-Pastur bulk.
+
+\textbf{Interpretation:} Spikes correspond to highly coherent transport directions shared across all prompts. At initialization (step~1), $\sim$143 spikes; collapse to $\sim$1--4 after step~2000. Almost complete disappearance of shared dominant directions.
+
+\textbf{Storage:} \texttt{spectra.h5} attribute \texttt{n\_spikes} per layer group.
+
+\textbf{Source:} \texttt{jlens/spectra.py}, function \texttt{find\_spike\_threshold()} (called within \texttt{fit\_mp\_bulk()}).
+
+%=====================================================================
+\section{Benchmark Evaluations}
+%=====================================================================
+
+Evaluation scores for Pythia-160M-deduped are taken from the \textbf{pre-computed EleutherAI evaluations} available in the Pythia GitHub repository~\cite{pythia-evals} at \path{evals/pythia-v1/pythia-160m-deduped/zero-shot/}. These cover 27 checkpoints: steps 0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1000, 3000, and then every 10,000 steps from 13,000 to 143,000.
+
+All evaluations were run on the \textbf{LM Evaluation Harness}~\cite{lm-eval-harness} (commit from early 2023) using the \texttt{hf-causal} model backend with batch size 16, zero-shot, on a single GPU (CUDA:7), with 100,000 bootstrap iterations for standard errors.
+
+\subsection{Benchmark Descriptions}
+
+%-------------------------------------------------
+\subsubsection{ARC-Easy}
+\label{bench:arc_easy}
+
+\textbf{Metric:} Accuracy (acc).
+
+\textbf{Description:} Grade-school multiple-choice science questions (Easy subset of the AI2 Reasoning Challenge). 2,376 examples.
+
+\textbf{Source:} \url{https://allenai.org/data/arc}
+
+%-------------------------------------------------
+\subsubsection{ARC-Challenge}
+\label{bench:arc_challenge}
+
+\textbf{Metric:} Accuracy (acc), also normalized accuracy (acc\_norm).
+
+\textbf{Description:} Harder subset of ARC questions requiring deeper reasoning. 1,172 examples.
+
+\textbf{Source:} \url{https://allenai.org/data/arc}
+
+%-------------------------------------------------
+\subsubsection{PIQA}
+\label{bench:piqa}
+
+\textbf{Metric:} Accuracy (acc), normalized accuracy (acc\_norm).
+
+\textbf{Description:} Physical Interaction QA: binary choice questions about physical commonsense. 3,084 examples.
+
+\textbf{Source:} \url{https://yonatanbisk.com/piqa/}
+
+%-------------------------------------------------
+\subsubsection{WinoGrande}
+\label{bench:winogrande}
+
+\textbf{Metric:} Accuracy (acc).
+
+\textbf{Description:} Large-scale pronoun resolution with adversarially filtered Winograd schemas. 1,267 examples.
+
+\textbf{Source:} \url{https://winogrande.allenai.org/}
+
+%-------------------------------------------------
+\subsubsection{SciQ}
+\label{bench:sciq}
+
+\textbf{Metric:} Accuracy (acc), normalized accuracy (acc\_norm).
+
+\textbf{Description:} Crowdsourced science exam questions with 4-way multiple choice. 1,000 examples.
+
+\textbf{Source:} \url{https://allenai.org/data/sciq}
+
+%-------------------------------------------------
+\subsubsection{LAMBADA (OpenAI)}
+\label{bench:lambada}
+
+\textbf{Metric:} Accuracy (acc), perplexity (ppl).
+
+\textbf{Description:} Word prediction requiring broad context (last word of a paragraph). Tests discourse-level language understanding. 5,153 examples.
+
+\textbf{Source:} \url{https://zenodo.org/record/2630551}
+
+%-------------------------------------------------
+\subsubsection{LogiQA}
+\label{bench:logiqa}
+
+\textbf{Metric:} Accuracy (acc), normalized accuracy (acc\_norm).
+
+\textbf{Description:} Machine reading comprehension with logical reasoning questions (translated from Chinese civil service exams). 651 examples.
+
+\textbf{Source:} \url{https://github.com/lgw863/LogiQA-dataset}
+
+%-------------------------------------------------
+\subsubsection{WSC (Winograd Schema Challenge)}
+\label{bench:wsc}
+
+\textbf{Metric:} Accuracy (acc).
+
+\textbf{Description:} Pronoun disambiguation in carefully constructed Winograd schemas. 104 examples (small, high variance).
+
+\textbf{Source:} \url{https://cs.nyu.edu/~davise/papers/WinogradSchemas/WS.html}
+
+%=====================================================================
+\section{Correlation Results (Spearman $\rho$)}
+%=====================================================================
+
+Table~\ref{tab:correlations} shows selected Spearman rank correlations between J-lens metrics and benchmark scores across 26 matched checkpoints (steps 1--143,000, excluding step~0 due to missing J-lens data). Statistical significance is indicated by $^{**}$ ($p < 0.01$) and $^{*}$ ($p < 0.05$).
+
+\begin{table}[H]
+\centering
+\caption{Top Spearman correlations ($|\rho| > 0.80$) between J-lens metrics and benchmark scores. All correlations with $|\rho| > 0.80$ are significant at $p < 0.01$.}
+\label{tab:correlations}
+\begin{tabular}{lrr}
+\toprule
+\textbf{J-Lens Metric} & \textbf{Benchmark} & $\rho$ \\
+\midrule
+$a_\ell$ (L0)               & ARC-Easy   & $-0.9013^{**}$ \\
+$n_{\text{spikes}}$ (L0)    & SciQ       & $-0.8940^{**}$ \\
+$n_{\text{spikes}}$ (L0)    & ARC-Easy   & $-0.8852^{**}$ \\
+$\bar{a}$ (mean)            & ARC-Easy   & $-0.8811^{**}$ \\
+$\mathbb{E}[\operatorname{tr}(J^\top J)]$ (L0) & SciQ  & $-0.8785^{**}$ \\
+$a_\ell$ (L5)               & ARC-Easy   & $-0.8767^{**}$ \\
+$n_{\text{spikes}}$ (L0)    & LAMBADA    & $-0.8618^{**}$ \\
+$n_{\text{spikes}}$ (L5)    & LAMBADA    & $+0.8613^{**}$ \\
+$\mathbb{E}[\operatorname{tr}(J^\top J)]$ (L0) & LAMBADA & $-0.8595^{**}$ \\
+$\mathbb{E}[\operatorname{tr}(J^\top J)]$ (L0) & PIQA    & $-0.8473^{**}$ \\
+$\mathbb{E}[\operatorname{tr}(J^\top J)]$ (L0) & WinoGrande & $-0.8468^{**}$ \\
+$a_\ell$ (L0)               & SciQ       & $-0.8467^{**}$ \\
+$n_{\text{spikes}}$ (L0)    & PIQA       & $-0.8460^{**}$ \\
+$a_\ell$ (L5)               & PIQA       & $-0.8439^{**}$ \\
+$\kappa_\ell$ (L0)          & ARC-Easy   & $-0.8401^{**}$ \\
+$\kappa_\ell$ (mean)        & ARC-Easy   & $-0.8233^{**}$ \\
+$n_{\text{spikes}}$ (L0)    & WinoGrande & $-0.8215^{**}$ \\
+$\alpha_\ell$ (L5)          & LAMBADA    & $+0.8200^{**}$ \\
+$\alpha_\ell$ (L5)          & PIQA       & $+0.8186^{**}$ \\
+$\kappa_\ell$ (L5)          & ARC-Easy   & $-0.8179^{**}$ \\
+$n_{\text{spikes}}$ (L5)    & ARC-Easy   & $+0.8169^{**}$ \\
+$\bar{\alpha}$ (mean)       & PIQA       & $+0.8161^{**}$ \\
+$\bar{\kappa}$ (mean)       & PIQA       & $-0.8151^{**}$ \\
+$\kappa_\ell$ (L5)          & PIQA       & $-0.8134^{**}$ \\
+$\mathbb{E}[\operatorname{tr}(J^\top J)]$ (mean) & WinoGrande & $-0.8105^{**}$ \\
+$\bar{a}$ (mean)            & PIQA       & $-0.8086^{**}$ \\
+$\bar{\alpha}$ (mean)       & ARC-Easy   & $+0.8069^{**}$ \\
+$\kappa_\ell$ (L0)          & PIQA       & $-0.8052^{**}$ \\
+$\bar{a}$ (mean)            & SciQ       & $-0.8005^{**}$ \\
+$a_\ell$ (L0)               & PIQA       & $-0.8001^{**}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Key Observations}
+
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{$a_\ell$ (identity coefficient) is the single best predictor of downstream performance.} $\rho(a_{\text{L0}}, \text{ARC-Easy}) = -0.90$: as the identity breaks, performance rises near-monotonically. This makes intuitive sense---the model must develop non-trivial layer-to-layer transformations to solve tasks.
+
+  \item \textbf{Coherence $\kappa_\ell$ and energy $\mathbb{E}[\operatorname{tr}(J^\top J)]$ are strongly anti-correlated with all benchmarks} ($\rho \approx -0.75$ to $-0.84$). The ``rigid workspace'' of initialization gives way to prompt-dependent transport.
+
+  \item \textbf{Power-law exponent $\alpha$ is positively correlated} ($\rho \approx +0.82$ with PIQA and LAMBADA). A more structured bulk (higher $\alpha$, further from the free-product Fuss-Catalan limit $\alpha \to 0$) corresponds to better downstream performance.
+
+  \item \textbf{Layer 0 is more predictive than deeper layers.} Early-layer metrics consistently show stronger correlations than Layer~5 or layer-averaged metrics. This aligns with the ``tuned lens'' picture where early layers develop the most pronounced spectral structure during training~\cite{belrose2023eliciting}.
+
+  \item \textbf{LogiQA, WSC, and ARC-Challenge show weak or no correlation.} These benchmarks are too difficult for Pythia-160M (performance near chance, little variance across training), limiting detectable signal.
+
+  \item \textbf{Layer 5 spikes correlate \emph{positively}} with performance ($\rho \approx +0.82$), while Layer~0 spikes correlate negatively. This layer-dependent sign flip suggests that the architectural role of shared transport directions changes with depth.
+\end{enumerate}
+
+%=====================================================================
+\section{Implementation Details}
+%=====================================================================
+
+\subsection{Jacobian Estimator}
+
+The Jacobian computation uses the \texttt{anthropics/jacobian-lens} library~\cite{jacobian-lens}, installed as a dependency at version \texttt{0.2.0}:
+\begin{itemize}
+  \item \texttt{jlens.fitting.jacobian\_for\_prompt()}: Computes $\partial h_{\text{final}} / \partial h_\ell$ for all layers in a single forward pass using PyTorch's \texttt{functorch} with per-block Jacobian factorization.
+  \item \texttt{jlens.hf.from\_hf()}: Wraps a HuggingFace model for Jacobian computation, applying a \texttt{LensModel} adapter that registers hooks and manages the forward pass.
+  \item Bridge module: \texttt{jlens/\_bridge.py} resolves the namespace collision between our local package and the upstream \texttt{jlens} package in site-packages.
+\end{itemize}
+
+\subsection{Model}
+
+\begin{itemize}
+  \item \textbf{Architecture:} Pythia-160M-deduped (GPT-NeoX), 12 layers, $d=768$, 12 attention heads.
+  \item \textbf{Pretraining:} 300B tokens on the deduplicated Pile~\cite{gao2020pile}, batch size 2M tokens.
+  \item \textbf{Checkpoints:} 153 checkpoints from step~1 to step~143,000 (24h time limit per SLURM job; 8$\times$ B300 GPUs).
+\end{itemize}
+
+\subsection{Prompts}
+
+1,000 prompts drawn from WikiText-103, filtered to $\geq$18 tokens (matching the upstream \texttt{jacobian-lens} requirement). Tokenization uses the Pythia tokenizer (GPT-NeoX 20B tokenizer).
+
+\subsection{Accumulation}
+
+Online (Welford-style) accumulation across all 1,000 prompts per checkpoint:
+\begin{itemize}
+  \item Per-prompt Jacobians are computed at \texttt{float16} on GPU, then accumulated at \texttt{float32} on CPU.
+  \item Final statistics are written to \texttt{stats.h5} (mean, gram, scalar attributes) and \texttt{spectra.h5} (eigenvalues, derived spectral quantities).
+\end{itemize}
+
+%=====================================================================
+\section{Software Versions}
+%=====================================================================
+
+\begin{itemize}
+  \item \textbf{Python:} 3.12
+  \item \textbf{PyTorch:} 2.11.0
+  \item \textbf{Transformers:} 4.49.0 (downgraded from 5.15.1 for compatibility)
+  \item \textbf{functorch:} bundled with PyTorch 2.x
+  \item \textbf{anthropics/jacobian-lens:} 0.2.0 (git: \texttt{github.com/anthropics/jacobian-lens})
+  \item \textbf{h5py:} 3.12.1
+  \item \textbf{SciPy:} 1.15.2
+  \item \textbf{Matplotlib:} 3.10.0
+  \item \textbf{NumPy:} 1.26.4
+  \item \textbf{vLLM:} 0.25.1 (in separate \texttt{~/vllm-env}, for benchmark evaluations; not yet used for correlated evals)
+\end{itemize}
+
+%=====================================================================
+\section{Data Files}
+%=====================================================================
+
+\begin{itemize}
+  \item \texttt{results/stepXXXX/stats.h5}: Per-layer accumulated Jacobian statistics (mean, gram matrix, scalar attributes).
+  \item \texttt{results/stepXXXX/spectra.h5}: Per-layer eigenvalue spectra and derived quantities.
+  \item \texttt{results/stepXXXX/metadata.json}: Run configuration and timing for each checkpoint.
+  \item \texttt{eval\_data/zero\_shot/stepXXX.json}: Pre-computed EleutherAI evaluation scores (zero-shot) from GitHub.
+  \item \texttt{eval\_data/scores\_matrix.npz}: Extracted benchmark score matrix.
+  \item \texttt{eval\_data/cross\_join.npz}: Cross-joined J-lens metrics and benchmark scores.
+  \item \texttt{scripts/plot\_evolution.py}: Main spectral evolution plotting script (6 figures).
+  \item \texttt{scripts/plot\_benchmark\_corr.py}: J-lens vs benchmark correlation plotting script (4 figures).
+\end{itemize}
+
+%=====================================================================
+\newpage
+\begin{thebibliography}{99}
+
+\bibitem{jacobian-lens}
+Anthropic. \textit{Jacobian Lens}. \url{https://github.com/anthropics/jacobian-lens}. \\
+GitHub repository. Provides \texttt{jlens.fitting}, \texttt{jlens.hf}, \texttt{jlens.hooks}, and \texttt{jlens.protocol} modules for computing full-model Jacobians via per-block factorization.
+
+\bibitem{pythia-paper}
+Stella Biderman, Hailey Schoelkopf, Quentin Gregory Anthony, et al. \\
+\textit{Pythia: A Suite for Analyzing Large Language Models Across Training and Scaling}. \\
+ICML 2023. \url{https://arxiv.org/abs/2304.01373}
+
+\bibitem{pythia-evals}
+EleutherAI. \textit{Pythia evaluation results}. \\
+\url{https://github.com/EleutherAI/pythia/tree/main/evals/pythia-v1/pythia-160m-deduped}
+
+\bibitem{lm-eval-harness}
+Leo Gao, Jonathan Tow, Baber Abbasi, et al. \\
+\textit{Language Model Evaluation Harness}. \\
+\url{https://github.com/EleutherAI/lm-evaluation-harness}
+
+\bibitem{gao2020pile}
+Leo Gao, Stella Biderman, Sid Black, et al. \\
+\textit{The Pile: An 800GB Dataset of Diverse Text for Language Modeling}. \\
+arXiv:2101.00027. \url{https://arxiv.org/abs/2101.00027}
+
+\bibitem{belrose2023eliciting}
+Nora Belrose, Zach Furman, Logan Smith, et al. \\
+\textit{Eliciting Latent Predictions from Transformers with the Tuned Lens}. \\
+arXiv:2303.08112. \url{https://arxiv.org/abs/2303.08112}
+
+\end{thebibliography}
+
+\end{document}
