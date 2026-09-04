@@ -50,6 +50,14 @@ def main(debug: bool):
               help="Comma-separated layer indices, or 'all'")
 @click.option("--checkpoints", default=None, type=str,
               help="Comma-separated explicit checkpoint steps (overrides start/end)")
+@click.option("--dim-batch", default=8, type=int,
+              help="Output dims per backward pass (higher = more VRAM, same FLOPs)")
+@click.option("--overlap", is_flag=True, default=False,
+              help="Enable cross-prompt eigenvector overlap measurement")
+@click.option("--overlap-seed", default=123, type=int,
+              help="Random seed for overlap prompt batch")
+@click.option("--overlap-n-prompts", default=None, type=int,
+              help="Number of overlap prompts (default: same as --n-prompts)")
 def run(
     model_id: str,
     dtype: str,
@@ -63,6 +71,10 @@ def run(
     end_step: int,
     layers: str | None,
     checkpoints: str | None,
+    dim_batch: int,
+    overlap: bool,
+    overlap_seed: int,
+    overlap_n_prompts: int | None,
 ):
     """Run the full checkpoint pipeline."""
     config = PipelineConfig(
@@ -76,7 +88,12 @@ def run(
         cache_dir=Path(cache_dir) if cache_dir else None,
         checkpoint_step_start=start_step,
         checkpoint_step_end=end_step,
+        dim_batch=dim_batch,
     )
+
+    if overlap:
+        config.overlap_seed = overlap_seed
+        config.overlap_n_prompts = overlap_n_prompts
 
     if layers and layers != "all":
         config.layers = [int(l.strip()) for l in layers.split(",")]

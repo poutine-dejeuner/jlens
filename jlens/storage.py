@@ -15,8 +15,15 @@ def _or_nan(x):
     return x if x is not None else np.nan
 
 def _or_nan_int(x):
-    """Return x or -1 if None (int version)."""
-    return x if x is not None else -1
+    """Return x or -1 if None or NaN (int version)."""
+    if x is None:
+        return -1
+    try:
+        if np.isnan(x):
+            return -1
+    except (TypeError, ValueError):
+        pass
+    return x
 
 
 def save_checkpoint_result(
@@ -56,13 +63,17 @@ def save_checkpoint_result(
             grp = f.create_group(f"layer_{i}")
             jbar_i = stats["jbar"][i]
             jtj_gram_i = stats["jtj_gram"][i]
+            sigma_gram_i = stats.get("sigma_gram", [None] * n_layers)[i]
             if jbar_i is not None:
                 grp.create_dataset("jbar", data=jbar_i)
                 grp.create_dataset("jtj_gram", data=jtj_gram_i)
+            if sigma_gram_i is not None:
+                grp.create_dataset("sigma_gram", data=sigma_gram_i)
             grp.attrs["coherence"] = stats["coherence"][i] if stats["coherence"][i] is not None else np.nan
             grp.attrs["a_coeff"] = stats["a_coeff"][i] if stats["a_coeff"][i] is not None else np.nan
             grp.attrs["r_norm"] = stats["r_norm"][i] if stats["r_norm"][i] is not None else np.nan
             grp.attrs["tr_jtj_mean"] = stats["tr_jtj_mean"][i] if stats["tr_jtj_mean"][i] is not None else np.nan
+            grp.attrs["fcr"] = _or_nan(stats.get("fcr", [None] * n_layers)[i])
 
     # Save spectral results
     with h5py.File(step_dir / "spectra.h5", "w") as f:
@@ -76,6 +87,9 @@ def save_checkpoint_result(
             ev = spectral["eigenvalues"][i]
             if ev is not None:
                 grp.create_dataset("eigenvalues", data=ev)
+            sigma_ev = spectral.get("sigma_eigenvalues", [None] * n_layers)[i]
+            if sigma_ev is not None and not np.isnan(sigma_ev).all():
+                grp.create_dataset("sigma_eigenvalues", data=sigma_ev)
             grp.attrs["coherence"] = _or_nan(spectral["coherence"][i])
             grp.attrs["a_coeff"] = _or_nan(spectral["a_coeff"][i])
             grp.attrs["r_norm"] = _or_nan(spectral["r_norm"][i])
@@ -83,8 +97,11 @@ def save_checkpoint_result(
             grp.attrs["n_spikes"] = _or_nan_int(spectral["n_spikes"][i])
             grp.attrs["power_law_alpha"] = _or_nan(spectral["power_law_alpha"][i])
             grp.attrs["effective_rank"] = _or_nan(spectral["effective_rank"][i])
+            grp.attrs["sigma_eff_rank"] = _or_nan(spectral.get("sigma_eff_rank", [np.nan] * n_layers)[i])
             grp.attrs["mp_sigma2"] = _or_nan(spectral["mp_sigma2"][i])
             grp.attrs["tr_jtj_mean"] = _or_nan(spectral["tr_jtj_mean"][i])
+            grp.attrs["fcr"] = _or_nan(spectral.get("fcr", [np.nan] * n_layers)[i])
+            grp.attrs["eigenvector_overlap"] = _or_nan(spectral.get("eigenvector_overlap", [np.nan] * n_layers)[i])
 
     # Save metadata
     metadata = {
@@ -120,10 +137,12 @@ def load_checkpoint_result(
 
         jbar = []
         jtj_gram = []
+        sigma_gram = []
         coherence = []
         a_coeff = []
         r_norm = []
         tr_jtj_mean = []
+        fcr = []
 
         for i in range(n_layers):
             grp = f[f"layer_{i}"]
@@ -134,19 +153,26 @@ def load_checkpoint_result(
             else:
                 jbar.append(None)
                 jtj_gram.append(None)
+            if "sigma_gram" in grp:
+                sigma_gram.append(np.array(grp["sigma_gram"]))
+            else:
+                sigma_gram.append(None)
             coherence.append(grp.attrs.get("coherence", None))
             a_coeff.append(grp.attrs.get("a_coeff", None))
             r_norm.append(grp.attrs.get("r_norm", None))
             tr_jtj_mean.append(grp.attrs.get("tr_jtj_mean", None))
+            fcr.append(grp.attrs.get("fcr", None))
 
         result["stats"] = {
             "n": n_prompts,
             "jbar": jbar,
             "jtj_gram": jtj_gram,
+            "sigma_gram": sigma_gram,
             "coherence": coherence,
             "a_coeff": a_coeff,
             "r_norm": r_norm,
             "tr_jtj_mean": tr_jtj_mean,
+            "fcr": fcr,
         }
 
     # Load spectral
@@ -154,39 +180,49 @@ def load_checkpoint_result(
         n_layers = f.attrs["n_layers"]
 
         eigenvalues = []
+        sigma_eigenvalues = []
         spectral_coherence = []
         q_eff_list = []
         n_spikes_list = []
         power_law_alpha_list = []
         effective_rank_list = []
+        fcr_list = []
+        sigma_eff_rank_list = []
+        overlap_list = []
 
         for i in range(n_layers):
             grp = f[f"layer_{i}"]
             if "eigenvalues" in grp:
                 eigenvalues.append(np.array(grp["eigenvalues"]))
-                spectral_coherence.append(grp.attrs["coherence"])
-                q_eff_list.append(grp.attrs["q_eff"])
-                n_spikes_list.append(grp.attrs["n_spikes"])
-                power_law_alpha_list.append(grp.attrs["power_law_alpha"])
-                effective_rank_list.append(grp.attrs["effective_rank"])
             else:
                 eigenvalues.append(None)
-                spectral_coherence.append(None)
-                q_eff_list.append(None)
-                n_spikes_list.append(None)
-                power_law_alpha_list.append(None)
-                effective_rank_list.append(None)
+            if "sigma_eigenvalues" in grp:
+                sigma_eigenvalues.append(np.array(grp["sigma_eigenvalues"]))
+            else:
+                sigma_eigenvalues.append(None)
+            spectral_coherence.append(grp.attrs.get("coherence", None))
+            q_eff_list.append(grp.attrs.get("q_eff", None))
+            n_spikes_list.append(grp.attrs.get("n_spikes", None))
+            power_law_alpha_list.append(grp.attrs.get("power_law_alpha", None))
+            effective_rank_list.append(grp.attrs.get("effective_rank", None))
+            fcr_list.append(grp.attrs.get("fcr", None))
+            sigma_eff_rank_list.append(grp.attrs.get("sigma_eff_rank", None))
+            overlap_list.append(grp.attrs.get("eigenvector_overlap", None))
 
         result["spectral"] = {
             "n_layers": n_layers,
             "d_model": f.attrs["d_model"],
             "n_prompts": f.attrs["n_prompts"],
             "eigenvalues": eigenvalues,
+            "sigma_eigenvalues": sigma_eigenvalues,
             "coherence": spectral_coherence,
             "q_eff": q_eff_list,
             "n_spikes": n_spikes_list,
             "power_law_alpha": power_law_alpha_list,
             "effective_rank": effective_rank_list,
+            "fcr": fcr_list,
+            "sigma_eff_rank": sigma_eff_rank_list,
+            "eigenvector_overlap": overlap_list,
         }
 
     return result

@@ -116,8 +116,9 @@ def main():
     print("--- Jbar Frobenius distance (old vs new) ---")
     with h5py.File("results/step143000/stats.h5", "r") as f:
         for li in layers:
-            if str(li) in f:
-                old_jbar = torch.tensor(f[str(li)][:])  # shape (d, d)
+            layer_key = f"layer_{li}"
+                if layer_key in f and "jbar" in f[layer_key]:
+                    old_jbar = torch.tensor(f[layer_key]["jbar"][:])
                 new_jbar = stats["jbar"][li]  # could be None
                 if new_jbar is None:
                     print(f"  L{li}: no new Jbar")

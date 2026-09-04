@@ -114,6 +114,28 @@ class TestCLIRun:
         ])
         assert result.exit_code == 0
 
+    def test_overlap_flag_parses(self, runner):
+        """--overlap is a valid option."""
+        result = runner.invoke(main, [
+            "run", "--overlap", "--help"
+        ])
+        assert result.exit_code == 0
+        assert "--overlap" in result.output
+
+    def test_overlap_seed_option(self, runner):
+        """--overlap-seed accepts an integer."""
+        result = runner.invoke(main, [
+            "run", "--overlap", "--overlap-seed", "456", "--help"
+        ])
+        assert result.exit_code == 0
+
+    def test_overlap_n_prompts_option(self, runner):
+        """--overlap-n-prompts accepts an integer."""
+        result = runner.invoke(main, [
+            "run", "--overlap", "--overlap-n-prompts", "500", "--help"
+        ])
+        assert result.exit_code == 0
+
 
 class TestCLIAnalyze:
     """Test the 'analyze' subcommand."""

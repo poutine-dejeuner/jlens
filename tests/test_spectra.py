@@ -11,6 +11,7 @@ from jlens.spectra import (
     fit_mp_bulk,
     fit_power_law_tail,
     marchenko_pastur_pdf,
+    subspace_overlap,
 )
 
 
@@ -139,6 +140,7 @@ class TestAnalyzeCheckpoint:
 
         jbar = []
         jtj_gram = []
+        sigma_gram = []
         coherence = []
         a_coeff = []
         r_norm = []
@@ -150,6 +152,9 @@ class TestAnalyzeCheckpoint:
                 a = rng.normal(0, 0.1, (d_model, d_model)) + np.eye(d_model) * 0.7
                 jbar.append(a)
                 jtj_gram.append(a.T @ a)
+                sigma = rng.normal(0, 0.01, (d_model, d_model))
+                sigma = sigma @ sigma.T
+                sigma_gram.append(sigma)
                 coherence.append(float(np.trace(a.T @ a) / np.sum(a**2)))
                 a_coeff.append(float(np.trace(a) / d_model))
                 r_norm.append(0.1)
@@ -157,6 +162,7 @@ class TestAnalyzeCheckpoint:
             else:
                 jbar.append(None)
                 jtj_gram.append(None)
+                sigma_gram.append(None)
                 coherence.append(None)
                 a_coeff.append(None)
                 r_norm.append(None)
@@ -166,6 +172,7 @@ class TestAnalyzeCheckpoint:
             "n": 50,
             "jbar": jbar,
             "jtj_gram": jtj_gram,
+            "sigma_gram": sigma_gram,
             "coherence": coherence,
             "a_coeff": a_coeff,
             "r_norm": r_norm,
@@ -243,3 +250,80 @@ class TestAnalyzeCheckpoint:
 
         # Isotropic J should have higher effective rank
         assert result_low["effective_rank"][0] > result_high["effective_rank"][0]
+
+    def test_sigma_eigenvalues_included(self):
+        """analyze_checkpoint includes sigma_eigenvalues and sigma_eff_rank."""
+        stats = self.make_stats(3, 64)
+        result = analyze_checkpoint(stats)
+        assert "sigma_eigenvalues" in result
+        assert "sigma_eff_rank" in result
+        assert len(result["sigma_eigenvalues"]) == 3
+        assert len(result["sigma_eff_rank"]) == 3
+        # All populated
+        for i in range(3):
+            assert result["sigma_eigenvalues"][i] is not None
+            assert not np.isnan(result["sigma_eff_rank"][i])
+
+    def test_fcr_passthrough(self):
+        """fcr from stats passes through to spectral output."""
+        stats = self.make_stats(1, 32)
+        stats["fcr"] = [0.5]
+        result = analyze_checkpoint(stats)
+        assert result["fcr"] == [0.5]
+
+    def test_sigma_nontolerance(self):
+        """Missing sigma_gram → sigma_eigenvalues is NaN placeholder."""
+        n_layers = 5
+        mask = [True, True, True, False, True]
+        stats = self.make_stats(n_layers, 128, population_mask=mask)
+        result = analyze_checkpoint(stats)
+        for i in range(n_layers):
+            if mask[i]:
+                assert result["sigma_eigenvalues"][i] is not None
+            else:
+                assert np.isnan(result["sigma_eigenvalues"][i]).all()
+
+
+class TestSubspaceOverlap:
+    """Tests for Grassmann subspace overlap between two Gram matrices."""
+
+    def test_identical_subspaces(self):
+        """Two identical Gram matrices → overlap ≈ 1."""
+        d = 64
+        A = np.random.randn(d, d) * 0.1 + np.eye(d)
+        gram = A.T @ A
+        ov = subspace_overlap(gram, gram, k=16)
+        assert abs(ov - 1.0) < 1e-5, f"identical matrices should give overlap 1, got {ov}"
+
+    def test_orthogonal_subspaces(self):
+        """Two orthogonal top-k subspaces → overlap ≈ 0."""
+        d = 32
+        k = 8
+        # Build two Grams whose top-k eigenspaces are orthogonal
+        # gram_a: top eigenvectors are first k standard basis vectors
+        ev_a = np.ones(d)
+        ev_a[:k] = 10.0  # large eigenvalues for first k basis
+        U_a = np.eye(d)
+        gram_a = U_a @ np.diag(ev_a) @ U_a.T
+
+        # gram_b: top eigenvectors are the next k basis vectors (orthogonal to first k)
+        ev_b = np.ones(d)
+        ev_b[k:2*k] = 10.0
+        U_b = np.eye(d)
+        gram_b = U_b @ np.diag(ev_b) @ U_b.T
+
+        ov = subspace_overlap(gram_a, gram_b, k=k)
+        assert ov < 0.01, f"orthogonal subspaces should give overlap ~0, got {ov}"
+
+    def test_partial_overlap(self):
+        """Random matrices → overlap in (0, 1)."""
+        d = 64
+        k = 16
+        A = np.random.randn(d, d) * 0.1 + np.eye(d)
+        B = np.random.randn(d, d) * 0.1 + np.eye(d)
+        gram_a = A.T @ A
+        gram_b = B.T @ B
+        ov = subspace_overlap(gram_a, gram_b, k=k)
+        assert 0.0 <= ov <= 1.0
+        # Shouldn't be exactly 0 or 1 for random matrices
+        assert 0.01 < ov < 0.99

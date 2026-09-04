@@ -149,3 +149,78 @@ class TestJacobianAccumulator:
         jbar = acc.get_mean(0)
         assert jbar is not None
         np.testing.assert_allclose(jbar.numpy(), expected.numpy(), rtol=1e-3)
+
+
+class TestSigmaAndFCR:
+    """Tests for Σ_ℓ and fluctuation-to-coherent ratio."""
+
+    def test_sigma_computation(self):
+        """Σ_ℓ = E[J⊤J] - J̄⊤J̄ should be PSD."""
+        d = 16
+        acc = JacobianAccumulator(n_layers=1, d_model=d)
+        # Two random Jacobians
+        eye = torch.eye(d)
+        j1 = eye + torch.randn(d, d) * 0.1
+        j2 = eye * 0.5 + torch.randn(d, d) * 0.1
+        acc.update({0: j1})
+        acc.update({0: j2})
+
+        sigma = acc.get_sigma(0)
+        assert sigma is not None
+        assert sigma.shape == (d, d)
+        # Σ should be symmetric
+        np.testing.assert_allclose(sigma.numpy(), sigma.T.numpy(), atol=1e-6)
+        # Σ should be PSD (all eigenvalues >= 0, modulo numerical noise)
+        eigvals = np.linalg.eigvalsh(sigma.numpy())
+        assert np.all(eigvals > -1e-8), f"negative eigenvalues: {eigvals[eigvals < -1e-8]}"
+
+    def test_fcr_relation_to_coherence(self):
+        """FCR = (1 - κ) / κ should hold exactly."""
+        d = 8
+        acc = JacobianAccumulator(n_layers=1, d_model=d)
+        for _ in range(20):
+            m = torch.randn(d, d) * 0.2 + torch.eye(d)
+            acc.update({0: m})
+
+        kappa = acc.get_coherence(0)
+        fcr = acc.get_fcr(0)
+        assert kappa is not None and fcr is not None
+        expected_fcr = (1.0 - kappa) / kappa
+        # FCR computed from traces should match (1-κ)/κ exactly
+        assert abs(fcr - expected_fcr) < 1e-6
+
+    def test_fcr_diverges_for_zero_coherent(self):
+        """If J̄ = 0, FCR → inf (coherent energy zero)."""
+        d = 8
+        acc = JacobianAccumulator(n_layers=1, d_model=d)
+        j1 = torch.randn(d, d)
+        j2 = -j1  # sum = 0, so J̄ = 0
+        acc.update({0: j1})
+        acc.update({0: j2})
+
+        fcr = acc.get_fcr(0)
+        # J̄ ≈ 0, but Σ = (J1⊤J1 + J2⊤J2)/2 > 0
+        assert fcr is not None
+        # FCR should be very large (diverging)
+        assert fcr > 1.0
+        assert np.isfinite(fcr) or fcr == float('inf')
+
+    def test_get_all_stats_includes_sigma_and_fcr(self):
+        """get_all_stats() returns sigma_gram and fcr lists."""
+        d = 8
+        acc = JacobianAccumulator(n_layers=5, d_model=d)
+        for i in range(4):  # 4 populated, last layer empty
+            acc.update({i: torch.eye(d) + torch.randn(d, d) * 0.01})
+
+        stats = acc.get_all_stats()
+        assert "sigma_gram" in stats
+        assert "fcr" in stats
+        assert len(stats["sigma_gram"]) == 5
+        assert len(stats["fcr"]) == 5
+        # Populated layers have sigma_gram
+        for i in range(4):
+            assert stats["sigma_gram"][i] is not None
+            assert stats["fcr"][i] is not None
+        # Empty layer has None sigma, None fcr
+        assert stats["sigma_gram"][4] is None
+        assert stats["fcr"][4] is None

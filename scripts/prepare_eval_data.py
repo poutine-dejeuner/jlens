@@ -146,15 +146,9 @@ def extract_jlens_metrics(
                         ev_norm = ev_pos / ev_pos.sum()
                         entropy = -np.sum(ev_norm * np.log(ev_norm))
                         er_vals.append(np.exp(entropy))
-                        # alpha from power-law tail
-                        tail = ev[ev < np.median(ev)]
-                        if len(tail) > 10:
-                            x = np.log(np.arange(1, len(tail) + 1))
-                            y = np.log(tail)
-                            slope, *_ = stats.linregress(x, y)
-                            alpha_vals.append(float(-slope))
-                        else:
-                            alpha_vals.append(np.nan)
+                        # alpha from stored attribute (computed by spectra.fit_power_law_tail)
+                        alpha = fsp[key].attrs.get("power_law_alpha", np.nan)
+                        alpha_vals.append(float(alpha))
                         q = 1000.0 / 768
                         bulk_edge = (1 + np.sqrt(q)) ** 2
                         spike_vals.append(int(np.sum(ev > 3 * bulk_edge)))

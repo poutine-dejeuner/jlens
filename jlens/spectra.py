@@ -6,6 +6,8 @@ Computes per-layer:
   - Power-law tail exponent α
   - Spike count above MP threshold
   - Effective rank (entropy-based)
+  - Σ_ℓ spectrum (fluctuation covariance eigenvalues)
+  - Eigenvector subspace overlap between prompt batches
 """
 
 import logging
@@ -56,11 +58,10 @@ def fit_power_law_tail(
     n_tail = max(int(n * tail_fraction), 10)
     tail = eigvals[-n_tail:]  # smallest eigenvalues
 
-    if tail[0] <= 0:
-        # Skip zero eigenvalues
-        tail = tail[tail > 0]
-        if len(tail) < 10:
-            return {"alpha": np.nan, "n_points": len(tail)}
+    # Filter out zeros / tiny values that break log-space fitting
+    tail = tail[tail > 1e-12]
+    if len(tail) < 10:
+        return {"alpha": np.nan, "n_points": len(tail)}
 
     # Fit: log CDF(λ) = α log λ + const
     # CDF is empirical: for sorted ascending tail, CDF(λ_i) ≈ i/n_tail
@@ -74,6 +75,9 @@ def fit_power_law_tail(
     slope, intercept, r_value, p_value, std_err = stats.linregress(
         log_lambda, log_cdf
     )
+
+    if np.isnan(slope):
+        return {"alpha": np.nan, "n_points": len(tail)}
 
     return {
         "alpha": float(slope),
@@ -244,6 +248,7 @@ def analyze_checkpoint(stats: dict) -> dict:
         "a_coeff": stats["a_coeff"],
         "r_norm": stats["r_norm"],
         "tr_jtj_mean": stats["tr_jtj_mean"],
+        "fcr": stats.get("fcr", [None] * n_layers),
     }
 
     eigenvalues = []
@@ -252,6 +257,9 @@ def analyze_checkpoint(stats: dict) -> dict:
     n_spikes = []
     effective_ranks = []
     mp_sigma2 = []
+
+    sigma_eigenvalues = []
+    sigma_eff_rank = []
 
     for layer_idx in range(n_layers):
         gram = stats["jtj_gram"][layer_idx]
@@ -262,6 +270,8 @@ def analyze_checkpoint(stats: dict) -> dict:
             n_spikes.append(np.nan)
             power_law_alpha.append(np.nan)
             mp_sigma2.append(np.nan)
+            sigma_eigenvalues.append(np.array([np.nan]))
+            sigma_eff_rank.append(np.nan)
             continue
 
         eigvals = eigen_decompose(gram)
@@ -279,11 +289,58 @@ def analyze_checkpoint(stats: dict) -> dict:
         pl_fit = fit_power_law_tail(eigvals)
         power_law_alpha.append(pl_fit["alpha"])
 
+        # Sigma (fluctuation covariance) spectrum
+        sigma_gram = stats.get("sigma_gram", [None] * n_layers)[layer_idx]
+        if sigma_gram is not None:
+            sig_ev = eigen_decompose(sigma_gram)
+            sigma_eigenvalues.append(sig_ev)
+            sigma_eff_rank.append(effective_rank(sig_ev))
+        else:
+            sigma_eigenvalues.append(np.array([np.nan]))
+            sigma_eff_rank.append(np.nan)
+
     results["eigenvalues"] = eigenvalues
     results["effective_rank"] = effective_ranks
     results["q_eff"] = q_eff
     results["n_spikes"] = n_spikes
     results["power_law_alpha"] = power_law_alpha
     results["mp_sigma2"] = mp_sigma2
+    results["sigma_eigenvalues"] = sigma_eigenvalues
+    results["sigma_eff_rank"] = sigma_eff_rank
 
     return results
+
+
+def subspace_overlap(gram_a: np.ndarray, gram_b: np.ndarray, k: int | None = None) -> float:
+    """Grassmann subspace overlap between top-k eigenvectors of two Gram matrices.
+
+    Computes (1/k) · tr(U_Aᵀ U_B U_Bᵀ U_A) where U_A, U_B are the top-k
+    eigenvectors (by eigenvalue) of gram_a and gram_b respectively.
+
+    This is the average squared cosine of the principal angles — the
+    canonical measure of subspace agreement.  Range [0, 1], where:
+      1 = identical subspaces
+      0 = mutually orthogonal subspaces
+
+    Args:
+        gram_a: D×D Gram matrix (first batch)
+        gram_b: D×D Gram matrix (second batch)
+        k: Number of top eigenvectors to use. Defaults to min(100, D//4).
+
+    Returns:
+        Overlap score in [0, 1].
+    """
+    d = gram_a.shape[0]
+    if k is None:
+        k = min(100, d // 4)
+    k = min(k, d)
+
+    _, U_a = np.linalg.eigh(gram_a)
+    _, U_b = np.linalg.eigh(gram_b)
+    # eigh returns ascending; take last k for largest eigenvalues
+    U_a_top = U_a[:, -k:]
+    U_b_top = U_b[:, -k:]
+
+    cross = U_a_top.T @ U_b_top  # k×k
+    overlap = np.trace(cross @ cross.T) / k
+    return float(np.clip(overlap, 0.0, 1.0))

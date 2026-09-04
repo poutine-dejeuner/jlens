@@ -26,36 +26,46 @@ def make_stats(n_layers, d_model, population_mask=None):
 
     jbar = []
     jtj_gram = []
+    sigma_gram = []
     coherence = []
     a_coeff = []
     r_norm = []
     tr_jtj_mean = []
+    fcr = []
 
     for i in range(n_layers):
         if population_mask[i]:
             m = np.random.randn(d_model, d_model) * 0.1 + np.eye(d_model)
             jbar.append(m)
             jtj_gram.append(m.T @ m)
+            sigma = np.random.randn(d_model, d_model) * 0.01
+            sigma = sigma @ sigma.T
+            sigma_gram.append(sigma)
             coherence.append(float(np.trace(m.T @ m) / np.sum(m**2)))
             a_coeff.append(float(np.trace(m) / d_model))
             r_norm.append(0.1)
             tr_jtj_mean.append(float(np.sum(m**2)))
+            fcr.append(0.5)
         else:
             jbar.append(None)
             jtj_gram.append(None)
+            sigma_gram.append(None)
             coherence.append(None)
             a_coeff.append(None)
             r_norm.append(None)
             tr_jtj_mean.append(None)
+            fcr.append(None)
 
     return {
         "n": 10,
         "jbar": jbar,
         "jtj_gram": jtj_gram,
+        "sigma_gram": sigma_gram,
         "coherence": coherence,
         "a_coeff": a_coeff,
         "r_norm": r_norm,
         "tr_jtj_mean": tr_jtj_mean,
+        "fcr": fcr,
     }
 
 
@@ -65,42 +75,58 @@ def make_spectral(n_layers, d_model, population_mask=None):
         population_mask = [True] * n_layers
 
     eigenvalues = []
+    sigma_eigenvalues = []
     eff_rank = []
+    sigma_eff_rank = []
     q_eff = []
     n_spikes = []
     power_law_alpha = []
     mp_sigma2 = []
+    fcr_list = []
+    overlap_list = []
 
     for i in range(n_layers):
         if population_mask[i]:
             eigenvalues.append(np.sort(np.random.rand(d_model))[::-1])
+            sigma_eigenvalues.append(np.sort(np.random.rand(d_model))[::-1])
             eff_rank.append(float(d_model * 0.5))
+            sigma_eff_rank.append(float(d_model * 0.3))
             q_eff.append(0.8)
             n_spikes.append(3)
             power_law_alpha.append(0.45)
             mp_sigma2.append(1.2)
+            fcr_list.append(1.5)
+            overlap_list.append(0.7)
         else:
             eigenvalues.append(np.array([np.nan]))
+            sigma_eigenvalues.append(np.array([np.nan]))
             eff_rank.append(np.nan)
+            sigma_eff_rank.append(np.nan)
             q_eff.append(np.nan)
             n_spikes.append(np.nan)
             power_law_alpha.append(np.nan)
             mp_sigma2.append(np.nan)
+            fcr_list.append(np.nan)
+            overlap_list.append(np.nan)
 
     return {
         "n_layers": n_layers,
         "d_model": d_model,
         "n_prompts": 10,
         "eigenvalues": eigenvalues,
+        "sigma_eigenvalues": sigma_eigenvalues,
         "coherence": [0.7 + i * 0.02 for i in range(n_layers)],
         "a_coeff": [0.5 for _ in range(n_layers)],
         "r_norm": [0.1 for _ in range(n_layers)],
         "tr_jtj_mean": [100.0 for _ in range(n_layers)],
         "effective_rank": eff_rank,
+        "sigma_eff_rank": sigma_eff_rank,
         "q_eff": q_eff,
         "n_spikes": n_spikes,
         "power_law_alpha": power_law_alpha,
         "mp_sigma2": mp_sigma2,
+        "fcr": fcr_list,
+        "eigenvector_overlap": overlap_list,
     }
 
 
@@ -128,10 +154,12 @@ class TestSaveLoadRoundtrip:
             for i in range(n_layers):
                 np.testing.assert_allclose(ls["jbar"][i], stats["jbar"][i], rtol=1e-5)
                 np.testing.assert_allclose(ls["jtj_gram"][i], stats["jtj_gram"][i], rtol=1e-5)
+                np.testing.assert_allclose(ls["sigma_gram"][i], stats["sigma_gram"][i], rtol=1e-5)
                 assert ls["coherence"][i] == pytest.approx(stats["coherence"][i])
                 assert ls["a_coeff"][i] == pytest.approx(stats["a_coeff"][i])
                 assert ls["r_norm"][i] == pytest.approx(stats["r_norm"][i])
                 assert ls["tr_jtj_mean"][i] == pytest.approx(stats["tr_jtj_mean"][i])
+                assert ls["fcr"][i] == pytest.approx(stats["fcr"][i])
 
             # Check spectral
             lsp = loaded["spectral"]
@@ -139,6 +167,10 @@ class TestSaveLoadRoundtrip:
             assert lsp["d_model"] == d_model
             for i in range(n_layers):
                 np.testing.assert_allclose(lsp["eigenvalues"][i], spectral["eigenvalues"][i], rtol=1e-5)
+                np.testing.assert_allclose(lsp["sigma_eigenvalues"][i], spectral["sigma_eigenvalues"][i], rtol=1e-5)
+                assert lsp["fcr"][i] == pytest.approx(spectral["fcr"][i])
+                assert lsp["sigma_eff_rank"][i] == pytest.approx(spectral["sigma_eff_rank"][i])
+                assert lsp["eigenvector_overlap"][i] == pytest.approx(spectral["eigenvector_overlap"][i])
 
             # Check metadata file
             with open(results_dir / "step0042" / "metadata.json") as f:

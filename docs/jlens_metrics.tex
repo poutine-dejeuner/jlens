@@ -82,7 +82,7 @@ Why it matters:
   = \frac{\text{coherent transport energy}}{\text{total transport energy}}
 \end{equation}
 
-\textbf{Motivation.} The central claim of the Jacobian-lens paper is not that linearization works locally (it does, by differentiability, everywhere), but that \emph{averaging} works: feature directions are transported to the output in a context-independent way, so per-prompt Jacobians $J_\ell^{(i)}$ agree and their mean $\bar{J}_\ell$ is meaningful. $\kappa_\ell$ is the natural scalar order parameter for this hypothesis (Direction~II, \S3 of the research note).
+\textbf{Motivation.} The central claim of the Jacobian-lens paper is not that linearization works locally (it does, by differentiability, everywhere), but that \emph{averaging} works: feature directions are transported to the output in a context-independent way, so per-prompt Jacobians $J_\ell^{(i)}$ agree and their mean $\bar{J}_\ell$ is meaningful. $\kappa_\ell$ quantifies the degree of this agreement.
 
 The moment decomposition:
 \begin{equation}
@@ -92,12 +92,27 @@ The moment decomposition:
 \end{equation}
 separates the coherent (context-independent, $\bar{J}_\ell^\top \bar{J}_\ell$) from the fluctuating (context-dependent, $\Sigma_\ell$) transport. $\kappa_\ell$ is the ratio of coherent to total trace energy.
 
+\textbf{Caveat: $\kappa_\ell$ is \emph{not} a monotonic order parameter.} It conflates two distinct phenomena:
+\begin{enumerate}
+  \item \textbf{Trivial agreement at initialization.} When the model is near-random, every per-block Jacobian is approximately $I$, so every per-prompt Jacobian is also approximately $I$. They ``agree'' ($\kappa \approx 1$) only because they all do nothing interesting---this is the absence of computation, not the presence of a workspace.
+  \item \textbf{Genuine workspace alignment at convergence.} In a trained model, the per-block Jacobians have developed structured, prompt-dependent computation. The early-layer per-prompt Jacobians become \emph{more} diverse (lower $\kappa$), while the late-layer ones converge to a shared readout map (higher $\kappa$).
+\end{enumerate}
+This means $\kappa_\ell$ \emph{decreases} during training in early layers ($0.94 \to 0.37$) even though the model is becoming \emph{more} capable. The decrease reflects the denominator $\mathbb{E}[\|J_\ell\|_F^2]$ shrinking more slowly than the numerator $\|\bar{J}_\ell\|_F^2$ as structured computation emerges.
+
+\textbf{What the workspace hypothesis actually needs.} For the workspace to exist, what must converge is not the raw $\kappa_\ell$ value but the \emph{structural properties} of the mean Jacobian under the decomposition $J_\ell^{(i)} = \bar{J}_\ell + \delta J_\ell^{(i)}$:
+\begin{itemize}
+  \item The \textbf{fluctuation-to-coherent ratio} $\operatorname{tr}(\Sigma_\ell)/\|\bar{J}_\ell\|_F^2 = (1-\kappa_\ell)/\kappa_\ell$ should stabilize---it measures how much more fluctuation energy exists relative to coherent energy, without the saturation-at-1 artifact.
+  \item The \textbf{power-law exponent $\alpha_\ell$} should depart from the Fuss-Catalan null ($\alpha \approx 0.08$ for uncorrelated factors) toward $\alpha \approx 0.45$ (aligned factors). This is a spectral signature of inter-block Jacobian alignment that is independent of the raw coherence value.
+  \item \textbf{Cross-prompt eigenvector agreement:} For two independent prompt batches $A$ and $B$, the overlap between the top-$k$ eigenvectors of $\bar{J}_\ell^A$ and $\bar{J}_\ell^B$ should be high even when $\kappa_\ell$ is moderate. This directly tests whether the dominant transport directions are shared, decoupled from how much total energy the mean captures.
+\end{itemize}
+The power-law exponent $\alpha$ is the only one of these we currently measure. The eigenvector overlap test is a priority for future work.
+
 Why it matters:
 \begin{itemize}
-  \item \textbf{Workspace-onset diagnostic:} The workspace hypothesis predicts $\kappa_\ell$ \emph{low} in early (sensory) layers, rising sharply at the workspace ``ignition'' layer, and $\kappa_\ell \approx 1$ in the motor band. A flat $\kappa_\ell$ profile would falsify the workspace claim.
-  \item \textbf{On Qwen3.5-4B:} $\kappa$ rises from $\approx 0.41$ (layer~4) to $\approx 0.97$ (layer~30), with the fluctuation-to-coherent energy ratio falling by two orders of magnitude. Six layers cannot distinguish a sharp onset from a gradual drift; the full-depth curve is a key open measurement.
-  \item \textbf{On Pythia-160M across training:} $\kappa_0$ drops from 0.94 (step~1) to 0.37 (step~143,000)---the opposite of the depth profile! At initialization, $\kappa$ is high everywhere because $J \approx I$ always (trivial agreement). As training proceeds, per-prompt Jacobians \emph{diverge}, and the mean becomes less representative. $\kappa_0$ is strongly anti-correlated with downstream performance ($\rho = -0.84$ with ARC-Easy).
-  \item \textbf{$\kappa$ at late training vs.\ $\kappa$ at initialization are different things:} In a trained model, low $\kappa$ in early layers = structured, prompt-specific transport. At initialization, high $\kappa$ = trivial identity transport. The \emph{shape} of $\kappa(\ell)$ (flat at init, structured at convergence) is the developmental signature.
+  \item \textbf{Depth profile as a detector of workspace onset.} On Qwen3.5-4B, $\kappa$ rises from $\approx 0.41$ (layer~4) to $\approx 0.97$ (layer~30), with the fluctuation-to-coherent ratio falling by two orders of magnitude. This monotonic depth climb is the signature of a workspace---late layers share a transport map that early layers lack.
+  \item \textbf{Training profile reveals a paradox.} On Pythia-160M Layer~0, $\kappa$ \emph{drops} from 0.94 (step~1) to 0.37 (step~143K). This is the \emph{opposite} of what a naive workspace order parameter would predict. The resolution is that high $\kappa$ at initialization is trivial (identity transport), and the drop reflects genuine structured computation emerging. The physically meaningful signal is the \emph{spectral shape} of $\bar{J}_\ell$ and $\Sigma_\ell$, not the raw $\kappa$ value.
+  \item \textbf{Correlation with benchmarks:} $\kappa_0$ anti-correlates with downstream performance ($\rho = -0.84$ with ARC-Easy). Counterintuitively, the model gets \emph{better} as the mean becomes \emph{less} representative of individual prompts---further evidence that $\kappa_\ell$ alone is not the workspace order parameter.
+  \item \textbf{The developmental signature is the shape of $\kappa(\ell)$, not its magnitude.} At initialization, $\kappa(\ell)$ is flat ($\approx 0.94$ for all layers). At convergence, it develops a gradient: low in sensory layers ($\approx 0.37$), high in motor layers ($\approx 0.97$). This gradient is the workspace, not any individual $\kappa_\ell$ value.
 \end{itemize}
 
 \textbf{Storage:} \texttt{stats.h5} attribute \texttt{coherence} per layer group.

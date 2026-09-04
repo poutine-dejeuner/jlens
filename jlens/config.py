@@ -22,6 +22,10 @@ class PipelineConfig:
     max_seq_len: int = 256
     prompt_seed: int = 42
 
+    # Overlap (cross-prompt eigenvector overlap)
+    overlap_seed: int = 123
+    overlap_n_prompts: int | None = None  # defaults to n_prompts
+
     # Checkpoints
     checkpoint_step_start: int = 1  # skip step0 (random init)
     checkpoint_step_end: int = 143000
@@ -30,6 +34,7 @@ class PipelineConfig:
     # Jacobian
     compute_per_prompt: bool = True  # accumulate J̄ and Σ online
     layers: Optional[list[int]] = None  # None = all layers
+    dim_batch: int = 8  # output dims per backward pass (higher = more VRAM)
 
     # Output
     results_dir: Path = Path("results")

@@ -2,8 +2,10 @@
 
 Uses Welford-style online updates to compute:
   J̄_ℓ = mean of per-prompt Jacobians
-  Σ_ℓ  = sum of squared deviations (for coherence)
+  Σ_ℓ  = E[J⊤J] - J̄⊤J̄  (fluctuation covariance)
   E[tr(J⊤J)] = mean of squared Frobenius norms
+  κ_ℓ  = coherence (coherent/total energy ratio)
+  FCR_ℓ = tr(Σ_ℓ) / ‖J̄_ℓ‖²_F  (fluctuation-to-coherent ratio)
 """
 
 import logging
@@ -104,21 +106,74 @@ class JacobianAccumulator:
             return None
         return self.sum_tr_jtj[layer_idx] / self.n
 
+    def get_sigma(self, layer_idx: int) -> Optional[torch.Tensor]:
+        """Get Σ_ℓ = E[J⊤J] - J̄⊤J̄, the fluctuation covariance.
+
+        Σ_ℓ is the second central moment of the per-prompt Jacobian
+        distribution. Its spectral properties (eigenvalues, eigenvectors,
+        effective rank) reveal the structure of prompt-dependent transport.
+
+        Returns None if no data.
+        """
+        jbar = self.get_mean(layer_idx)
+        if jbar is None:
+            return None
+        e_jtj = self.sum_jtj[layer_idx] / self.n
+        jbar_gram = jbar.T @ jbar
+        sigma = e_jtj - jbar_gram
+        # Clamp tiny negative eigenvalues from numerical error
+        sigma = (sigma + sigma.T) / 2  # symmetrize
+        return sigma.to(self.dtype)
+
+    def get_sigma_gram(self, layer_idx: int) -> Optional[torch.Tensor]:
+        """Get Σ_ℓ as a numpy array (for storage). Returns None if no data."""
+        sigma = self.get_sigma(layer_idx)
+        if sigma is None:
+            return None
+        return sigma.numpy()
+
+    def get_fcr(self, layer_idx: int) -> Optional[float]:
+        """Get fluctuation-to-coherent ratio: tr(Σ_ℓ) / ‖J̄_ℓ‖²_F.
+
+        FCR = (1 - κ_ℓ) / κ_ℓ measures how much more fluctuation energy
+        exists relative to coherent energy.  Unlike κ_ℓ, FCR does not
+        saturate at 1 for near-identity transport, making it a cleaner
+        order parameter across initialization and convergence.
+
+        Returns None if no data, inf if ‖J̄‖²_F = 0.
+        """
+        jbar = self.get_mean(layer_idx)
+        if jbar is None:
+            return None
+        sigma = self.get_sigma(layer_idx)
+        if sigma is None:
+            return None
+        tr_sigma = torch.trace(sigma).item()
+        tr_jbar_gram = torch.sum(jbar ** 2).item()
+        if tr_jbar_gram == 0:
+            return float('inf')
+        return tr_sigma / tr_jbar_gram
+
     def get_all_stats(self) -> dict:
         """Get all accumulated statistics for layers that have data."""
         jbar_list = []
         jtj_gram_list = []
+        sigma_gram_list = []
         for i in range(self.n_layers):
             m = self.get_mean(i)
             g = self.get_gram(i)
+            s = self.get_sigma_gram(i)
             jbar_list.append(m.numpy() if m is not None else None)
             jtj_gram_list.append(g.numpy() if g is not None else None)
+            sigma_gram_list.append(s if s is not None else None)
         return {
             "n": self.n,
             "jbar": jbar_list,
             "jtj_gram": jtj_gram_list,
+            "sigma_gram": sigma_gram_list,
             "coherence": [self.get_coherence(i) for i in range(self.n_layers)],
             "a_coeff": [self.get_a_coeff(i) for i in range(self.n_layers)],
             "r_norm": [self.get_r_norm(i) for i in range(self.n_layers)],
             "tr_jtj_mean": [self.get_tr_jtj_mean(i) for i in range(self.n_layers)],
+            "fcr": [self.get_fcr(i) for i in range(self.n_layers)],
         }

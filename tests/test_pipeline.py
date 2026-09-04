@@ -82,7 +82,10 @@ class TestFullPipeline:
             # Layer 11: None / NaN (stored as NaN in HDF5, loaded as float NaN)
             assert ls["jbar"][11] is None
             assert ls["jtj_gram"][11] is None
+            assert ls["sigma_gram"][11] is None
             assert np.isnan(ls["coherence"][11])
+            # fcr is None from accumulator, stored as NaN in HDF5, loaded as NaN
+            assert ls["fcr"][11] is None or np.isnan(ls["fcr"][11])
             assert lsp["eigenvalues"][11] is not None  # array([nan]) from HDF5
             assert np.isnan(lsp["eigenvalues"][11]).all()
 
@@ -113,7 +116,49 @@ class TestFullPipeline:
                 assert loaded["spectral"]["eigenvalues"][i] is not None
                 assert not np.isnan(loaded["spectral"]["eigenvalues"][i]).all()
 
-    def test_multiple_checkpoints(self):
+    def test_sigma_and_fcr_in_pipeline(self):
+        """Full pipeline produces sigma_gram, fcr, and sigma_eigenvalues."""
+        d_model = 128
+        n_layers = 4
+        acc = JacobianAccumulator(n_layers=n_layers, d_model=d_model)
+
+        rng = np.random.default_rng(42)
+        for _ in range(30):
+            jacs = {}
+            for i in range(n_layers):
+                a = torch.from_numpy(rng.normal(0, 0.1, (d_model, d_model)).astype(np.float32))
+                jacs[i] = a + torch.eye(d_model) * 0.7
+            acc.update(jacs)
+
+        stats = acc.get_all_stats()
+        assert "sigma_gram" in stats
+        assert "fcr" in stats
+        for i in range(n_layers):
+            assert stats["sigma_gram"][i] is not None, f"layer {i} sigma_gram is None"
+            assert stats["fcr"][i] is not None, f"layer {i} fcr is None"
+
+        spectral = analyze_checkpoint(stats)
+        assert "sigma_eigenvalues" in spectral
+        assert "sigma_eff_rank" in spectral
+        for i in range(n_layers):
+            assert spectral["sigma_eigenvalues"][i] is not None
+            assert not np.isnan(spectral["sigma_eff_rank"][i])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            results_dir = Path(tmp)
+            save_checkpoint_result(results_dir, step=2000, stats=stats, spectral=spectral)
+            loaded = load_checkpoint_result(results_dir, 2000)
+            for i in range(n_layers):
+                np.testing.assert_allclose(
+                    loaded["stats"]["sigma_gram"][i],
+                    stats["sigma_gram"][i],
+                    rtol=1e-4,
+                )
+                np.testing.assert_allclose(
+                    loaded["spectral"]["sigma_eigenvalues"][i],
+                    spectral["sigma_eigenvalues"][i],
+                    rtol=1e-4,
+                )
         """Simulate sequential processing of multiple checkpoints."""
         d_model = 64
         n_layers = 4
