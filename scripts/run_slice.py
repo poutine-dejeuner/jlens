@@ -45,7 +45,8 @@ def main():
     my_steps = all_steps[start:end]
 
     # Filter out already-done checkpoints (resume support)
-    todo = [s for s in my_steps if not is_checkpoint_done(args.results_dir, s)]
+    has_overlap = args.overlap
+    todo = [s for s in my_steps if not is_checkpoint_done(args.results_dir, s, require_overlap=has_overlap)]
     skipped = len(my_steps) - len(todo)
 
     print(f"Task {args.task_id}: {len(my_steps)} total, {len(todo)} pending, {skipped} already done")

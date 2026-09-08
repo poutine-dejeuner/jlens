@@ -36,7 +36,7 @@ For each checkpoint step:
 
 ## Slurm submission
 
-Always follow `SLURM.md` rules: explicit `--gres`, `--cpus-per-task`, `--mem`,
+Always follow `docs/SLURM.md` rules: explicit `--gres`, `--cpus-per-task`, `--mem`,
 `--time`.  Max 1 GPU per job unless multi-GPU code (DDP/FSDP).
 
 **Full run (153 checkpoints × 1000 prompts):**

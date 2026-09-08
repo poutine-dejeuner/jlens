@@ -228,8 +228,30 @@ def load_checkpoint_result(
     return result
 
 
-def is_checkpoint_done(results_dir: Path | str, step: int) -> bool:
-    """Check if a checkpoint has already been processed."""
+def is_checkpoint_done(results_dir: Path | str, step: int, require_overlap: bool = False) -> bool:
+    """Check if a checkpoint has already been processed.
+
+    When require_overlap=True, also checks that the eigenvector_overlap
+    attribute is present in the stored spectra.
+    """
     results_dir = Path(results_dir)
     step_dir = results_dir / f"step{step:04d}"
-    return (step_dir / "metadata.json").exists()
+    metadata_ok = (step_dir / "metadata.json").exists()
+    if not metadata_ok:
+        return False
+    if require_overlap:
+        spectra_path = step_dir / "spectra.h5"
+        if not spectra_path.exists():
+            return False
+        try:
+            import h5py
+            with h5py.File(spectra_path, "r") as f:
+                # Check first available layer for overlap key
+                for key in sorted(f.keys()):
+                    if "eigenvector_overlap" in f[key].attrs:
+                        return True
+                    break  # check only the first layer
+            return False
+        except Exception:
+            return False
+    return True

@@ -161,8 +161,9 @@ def run_pipeline(config: PipelineConfig) -> None:
     # Filter out already-completed checkpoints
     todo = []
     skipped = 0
+    has_overlap = getattr(config, 'overlap_seed', None) is not None
     for step in steps:
-        if is_checkpoint_done(config.results_dir, step):
+        if is_checkpoint_done(config.results_dir, step, require_overlap=has_overlap):
             skipped += 1
         else:
             todo.append(step)

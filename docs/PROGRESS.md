@@ -1,10 +1,12 @@
 # PROGRESS.md — J-Lens: Spectral Evolution of the Jacobian Workspace Across Pythia-160M Training
+We record here significant results (positive or negative). The level of details
+is adapted to match the importance of the result.
 
 ## Overview
 
 This project measures the **Jacobian lens** $\bar{J}_\ell = \mathbb{E}[\partial h_{\text{final}} / \partial h_\ell]$ across 153 Pythia-160M-deduped pretraining checkpoints (step 1—143,000, 1000 wikitext prompts each), using the `anthropics/jacobian-lens` reference implementation. We cross-correlate the resulting spectral metrics with EleutherAI benchmark evaluations at 26 overlapping checkpoints.
 
-**Sweep complete:** 153/153 checkpoints done. 49/49 tests passing. Publication-quality plots and metric dictionary exist.
+**Sweep complete:** 153/153 checkpoints done. Overlap sweep complete (26/27 checkpoints). WMT eval complete (153/153). 71/71 tests passing. Publication-quality plots and metric dictionary exist.
 
 ---
 
@@ -96,6 +98,42 @@ Top Spearman $\rho$ (26 matched checkpoints, all $|\rho| > 0.80$ significant at 
 
 ---
 
+## WMT14 fr-en Translation Analysis
+
+We ran inference on all 153 checkpoints on WMT14 French→English (3003 examples). Pythia-160M is monolingual English and never learns to translate: BLEU ≈ 0–0.4 everywhere. But chrF (character n-gram overlap, 0–11.2) and TER (edit distance, 388→159) capture increasing English fluency.
+
+**Key finding:** Translation metrics correlate 1.5× weaker with J-lens metrics than comprehension benchmarks:
+
+| Task type | Best \|ρ\| | Best \|r\| | Metric |
+|---|---|---|---|
+| Comprehension (ARC-Easy) | 0.898 | 0.894 | Identity a L0 |
+| Comprehension (WinoGrande) | 0.899 | 0.896 | Spike count L0 |
+| **Translation (BLEU)** | **0.613** | **0.493** | **Power-law α L0** |
+| **Translation (TER)** | **0.579** | **0.494** | **Coherence κ L0** |
+
+This supports the hypothesis that the Jacobian workspace is **working memory**, not a computation site — translation requires cross-lingual computation elsewhere.
+
+---
+
+## Cross-Prompt Eigenvector Overlap
+
+Measured on 27 eval-matched checkpoints with 1000+1000 prompts (seed 42 vs seed 123). Uses Grassmann overlap: $(1/k) \operatorname{tr}(U_A^\top U_B U_B^\top U_A)$ with $k=100$.
+
+**Key result: Overlap ≈ 1.0 across ALL training stages.** Minimum 0.9942 (step 123K), maximum 1.0000 (step 32). This was unexpected given $\kappa_0$ falls from 0.94→0.37.
+
+**Implication:** The dominant eigenspace of $\bar{J}_0$ is nearly identical across independent prompt batches, even when coherence κ is low. Low κ ≠ subspace disagreement — it means the *norm* of J fluctuates per prompt, but the directions stay aligned. The workspace is a **stable subspace** from initialization onward. What changes across training is not its geometry but its energy content (FCR rising, identity component falling).
+
+### FCR (Fluctuation-to-Coherent Ratio)
+
+$\operatorname{FCR} = \operatorname{tr}(\Sigma) / \|\bar{J}\|_F^2 = (1-\kappa)/\kappa$
+
+- Step 1: FCR = 0.065 → fluctuation is 6.5% of coherent energy
+- Step 143K: FCR = 1.43 → fluctuation exceeds coherent energy
+
+FCR rises monotonically alongside training, driven entirely by $\kappa$ falling, since the subspace itself doesn't change.
+
+---
+
 ## Architecture & Implementation Notes
 
 - **Jacobian estimator:** `anthropics/jacobian-lens` (v0.1.3), installed via `uv add` with Git dependency. Bridge module `jlens/_bridge.py` handles namespace collision with local `jlens` package.
@@ -103,16 +141,27 @@ Top Spearman $\rho$ (26 matched checkpoints, all $|\rho| > 0.80$ significant at 
 - **Layer constraint:** `source_layers < target_layer = n_layers - 1`. Runner defaults to `list(range(n_layers - 1))` (layers 0–10). Layer 11 (target) has no Jacobian data.
 - **Storage:** HDF5 per checkpoint (`stats.h5` + `spectra.h5` + `metadata.json`). All storage paths are None-tolerant — layer 11 entries use `np.nan`/`None` sentinels.
 - **Speed:** ~0.5 s/prompt on B300 after JIT compilation (~9 min/checkpoint, ~23 h on 1 GPU, ~3 h on 8 GPUs).
-- **Tests:** 49/49 passing, covering the 3 crash bugs that wasted ~10 h across 4 failed job attempts (`.numpy()` on None, `create_dataset(data=None)`, `str / str` TypeError) plus 4 CLI option bugs.
+- **Tests:** 71/71 passing, covering the 3 crash bugs that wasted ~10 h across 4 failed job attempts (`.numpy()` on None, `create_dataset(data=None)`, `str / str` TypeError) plus 4 CLI option bugs.
 
 ---
 
 ## What's Next
 
-1. **Phase 1 of geometric identification** (plan in `plan-geom-id.md`): extract hidden states from Pythia-160M for modular arithmetic, fit linear probes, PCA on activation differences. Compare computation subspaces $C_\ell$ with J-space eigenvectors.
-2. **Cross-prompt eigenvector overlap measurement:** the missing workspace diagnostic — do the dominant directions of $\bar{J}_\ell$ agree across independent prompt batches? This decouples "subspace agreement" from raw coherence.
-3. **Compute $\operatorname{tr}(\Sigma_\ell)$ explicitly:** we currently store $\bar{J}_\ell$ and $\mathbb{E}[J_\ell^\top J_\ell]$ but don't extract $\Sigma_\ell$ separately. The fluctuation matrix's spectral properties (rank, eigenvectors) are as informative as $\bar{J}_\ell$'s.
-4. **Full 153-checkpoint eval sweep with vLLM:** evaluate all Pythia checkpoints (not just the 27 EleutherAI pre-computed ones) to fill the correlation matrix. vLLM job 4437 is queued waiting for GPU resources.
+### Done
+- ✅ Full 153-checkpoint sweep (spectra, coherence, power-law, spikes, FCR)
+- ✅ WMT14 fr-en translation evaluation on all 153 checkpoints
+- ✅ Cross-prompt eigenvector overlap on 27 checkpoints (Grassmann overlap)
+- ✅ Fluctuation-to-coherent ratio (FCR) computation
+
+### Remaining
+1. **CKA block structure across (layer, step):** the signature workspace diagnostic from the original paper — compute CKA(J̄_i, J̄_j) for all (i,j,layer) and track block emergence
+2. **MLP-gain curve per checkpoint:** measure how much MLP layers amplify J-lens directions relative to attention layers
+3. **Spike-overlap analysis (Direction I #2):** overlap matrix between top eigenvectors of J̄ᵀJ̄ and interpretable concept directions
+4. **Three-spectrum NFA test (Direction VI):** weight Gram ≈ AGOP ≈ lens-spike + fluctuation-bulk
+5. **Full 153-checkpoint eval sweep:** evaluate all Pythia checkpoints (not just the 27 EleutherAI pre-computed ones)
+
+### Moved to separate project
+- **Phase 1 geometric identification** (modular arithmetic, linear probes) — now a standalone project
 
 ---
 

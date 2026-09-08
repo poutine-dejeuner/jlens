@@ -17,6 +17,8 @@ dependencies = [
     "tqdm>=4.0",
     "jlens",
     "vllm>=0.26.0",
+    "lm-eval>=0.4.13",
+    "sacrebleu>=2.6.0",
 ]
 
 [project.scripts]
