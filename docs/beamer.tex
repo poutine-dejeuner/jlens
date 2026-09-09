@@ -1,0 +1,493 @@
+\documentclass[aspectratio=169,11pt]{beamer}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{hyperref}
+
+\usetheme{Madrid}
+\usecolortheme{default}
+
+% ---------- title ----------
+\title[J-Lens × Pythia-160M]{Spectral Evolution of the Jacobian Workspace\\Across Pythia-160M Pretraining}
+\subtitle{153 Checkpoints · 1000 Prompts · 10 Key Findings}
+\author{}
+\institute{}
+\date{\today}
+
+\begin{document}
+
+% ===================================================================
+\frame{\titlepage}
+
+% ===================================================================
+\section{What We Measure and Why}
+
+\begin{frame}{The Jacobian Lens}
+\begin{block}{Definition}
+For a transformer with $L$ layers and hidden dimension $d$:
+\[
+\bar{J}_\ell = \mathbb{E}_{x\sim\text{prompts}}\!\left[
+\frac{\partial h_{\text{final}}(x)}{\partial h_\ell(x)}
+\right] \in \mathbb{R}^{d \times d}
+\]
+\end{block}
+
+\begin{block}{Why it matters}
+\begin{itemize}
+\item In a residual network: $h_{\ell+1} = h_\ell + F_\ell(h_\ell)$
+\item Per-block Jacobian: $I + \partial F_\ell / \partial h_\ell$
+\item $\bar{J}_\ell$ tells us: \emph{on average, how does a perturbation at layer $\ell$ propagate to the output?}
+\item If the model has a \textbf{workspace}---a shared context-independent transport map---then $\bar{J}_\ell$ should be structured, low-rank, and stable across prompts.
+\end{itemize}
+\end{block}
+
+\vspace{6pt}
+\textbf{Setup:} Pythia-160M-deduped ($L=12$, $d=768$), 153 checkpoints (step~1--143,000), 1000 wikitext prompts, \texttt{anthropics/jacobian-lens} estimator.
+\end{frame}
+
+% ===================================================================
+\begin{frame}{Key Metrics}
+\small
+\begin{table}
+\begin{tabular}{lp{0.28\textwidth}p{0.38\textwidth}}
+\toprule
+\textbf{Metric} & \textbf{Formula} & \textbf{What it measures} \\
+\midrule
+Identity $a_\ell$
+& $\frac{1}{d}\operatorname{tr}(\bar{J}_\ell)$
+& Scalar component of mean transport. $a=1 \Rightarrow J \approx I$ (no computation). $a \ll 1 \Rightarrow$ structured off-diagonal transport has emerged. \\
+
+Coherence $\kappa_\ell$
+& $\frac{\|\bar{J}_\ell\|_F^2}{\mathbb{E}[\|J_\ell\|_F^2]}$
+& Representativeness of the mean. $\kappa=1 \Rightarrow$ all per-prompt $J$ are identical. Low $\kappa \Rightarrow$ large prompt-to-prompt variation. \\
+
+Effective rank
+& $\exp(-\sum p_k \ln p_k)$
+& Number of eigendirections carrying significant transport. Range $[1,d]$. \\
+
+Power-law $\alpha$
+& $\text{CDF}(\lambda) \propto \lambda^\alpha$ (tail 30\%)
+& Alignment of per-block Jacobians. Null (indep.\ factors): $\alpha = 1/(N+1) \approx 0.08$. Measured: $\alpha \approx 0.44$.\\
+
+Spike count
+& $\#\{\lambda_k > \text{BBP}\}$
+& Statistically significant outlier directions in the spectrum. \\
+
+FCR
+& $\frac{\operatorname{tr}(\Sigma)}{\|\bar{J}\|_F^2} = \frac{1-\kappa}{\kappa}$
+& Fluctuation-to-coherent energy ratio. Unbounded; cleaner than $\kappa$. \\
+
+Overlap
+& $\frac{1}{k}\operatorname{tr}(U_A^\top U_B U_B^\top U_A)$
+& Grassmann agreement of top-$k$ eigenvectors across prompt splits. \\
+
+\bottomrule
+\end{tabular}
+\end{table}
+\end{frame}
+
+% ===================================================================
+\section{Ten Key Findings}
+
+% ===================================================================
+\begin{frame}{Finding 1: $a_0$ is the Best Predictor of Performance}
+\begin{columns}[T]
+\begin{column}{0.38\textwidth}
+\vspace{6pt}
+\begin{table}
+\small
+\begin{tabular}{lr}
+\toprule
+Benchmark & $\rho$ \\
+\midrule
+ARC-Easy  & $-\mathbf{0.901}^{**}$ \\
+SciQ      & $-0.886^{**}$ \\
+PIQA      & $-0.814^{**}$ \\
+LAMBADA   & $-0.808^{**}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\vspace{6pt}
+\begin{itemize}
+\item $a_0$ drops $1.00 \to 0.17$ across training
+\item Scalar readout of ``computation learned''
+\item No other metric matches this predictive power
+\end{itemize}
+\end{column}
+\begin{column}{0.58\textwidth}
+\includegraphics[width=\textwidth]{figures/identity_vs_arc_easy.png}
+\end{column}
+\end{columns}
+\end{frame}
+
+% ===================================================================
+\begin{frame}{Finding 2: $\kappa$ is NOT a Monotonic Order Parameter}
+\begin{columns}[T]
+\begin{column}{0.35\textwidth}
+\vspace{6pt}
+\textbf{The paradox:}
+\[
+\kappa_0: 0.94 \to \mathbf{0.37}
+\]
+Model improves, but coherence \emph{drops}.
+
+\vspace{6pt}
+\textbf{Resolution:}
+\begin{itemize}
+\item High $\kappa$ at init = trivial identity agreement ($J \approx I$ everywhere)
+\item Low $\kappa$ at convergence = \emph{genuine} structured transport with prompt-dependent variation
+\item \textbf{The depth profile gradient $\kappa(\ell)$ is the workspace}
+\end{itemize}
+\end{column}
+\begin{column}{0.62\textwidth}
+\includegraphics[width=\textwidth]{figures/coherence_ignition.png}
+\end{column}
+\end{columns}
+\end{frame}
+
+% ===================================================================
+\begin{frame}{Finding 2 (cont'd): The Workspace is a Stable Subspace}
+\begin{columns}[T]
+\begin{column}{0.35\textwidth}
+\vspace{6pt}
+\textbf{Cross-prompt eigenvector overlap:}
+\[
+\min = 0.9942,\;
+\max = 1.0000
+\]
+
+\vspace{6pt}
+\begin{itemize}
+\item Dominant eigenspace is \textbf{identical} across independent prompt batches
+\item $\kappa$ falls because \emph{norm} fluctuates, not subspace
+\item The workspace is a \textbf{stable subspace} from init onward
+\end{itemize}
+\end{column}
+\begin{column}{0.62\textwidth}
+\includegraphics[width=\textwidth]{figures/overlap_vs_coherence.png}
+\end{column}
+\end{columns}
+\end{frame}
+
+% ===================================================================
+\begin{frame}{Finding 3: $\alpha \approx 0.44$ is Near-Universal}
+\begin{columns}[T]
+\begin{column}{0.38\textwidth}
+\vspace{6pt}
+\textbf{Null hypothesis} (independent per-block $J$):
+\[
+\alpha_{\text{null}} = \frac{1}{N+1} \approx 0.08
+\]
+for $N = 12$ layers.
+
+\vspace{6pt}
+\textbf{Measured:}
+\[
+\alpha \approx 0.44
+\]
+
+\vspace{6pt}
+\begin{itemize}
+\item Matches Qwen3.5-4B ($N=28$) despite 25$\times$ size difference
+\item Effective free-factor count $\approx 1.2$: 12 layers behave like \textbf{one matrix}
+\item Strong inter-block alignment
+\item $\alpha$ correlates with PIQA ($\rho = +0.820$)
+\end{itemize}
+\end{column}
+\begin{column}{0.58\textwidth}
+\includegraphics[width=\textwidth]{figures/power_law_analysis.png}
+\end{column}
+\end{columns}
+\end{frame}
+
+% ===================================================================
+\begin{frame}{Finding 4: Effective Rank is Non-Monotonic}
+\begin{columns}[T]
+\begin{column}{0.38\textwidth}
+\vspace{6pt}
+\textbf{``Drainage'' pattern:}
+
+\small
+\begin{tabular}{lr}
+\toprule
+Step & Eff.\ Rank \\
+\midrule
+1     & 242 \\
+128   & 163 \\
+1,000 & \textbf{241} \\
+143K  & 154 \\
+\bottomrule
+\end{tabular}
+
+\vspace{6pt}
+\begin{itemize}
+\item Collapse $\to$ Rebound $\to$ Prune
+\item \textbf{Not predicted} by any theory
+\item Suggests three dynamical regimes: identity collapse, structured expansion, convergence pruning
+\end{itemize}
+\end{column}
+\begin{column}{0.58\textwidth}
+\includegraphics[width=\textwidth]{figures/eff_rank_drainage.png}
+\end{column}
+\end{columns}
+\end{frame}
+
+% ===================================================================
+\begin{frame}{Finding 5: Four Training Phases}
+\begin{columns}[T]
+\begin{column}{0.42\textwidth}
+\vspace{6pt}
+\small
+\begin{tabular}{lcccc}
+\toprule
+Phase & Steps & $a_0$ & $\kappa_0$ & Spikes \\
+\midrule
+1. Near-id.    & 1--64    & 1.00 & 0.95 & 164 \\
+2. Id.\ collapse & 128--512 & 0.84 & 0.93 & 111 \\
+3. Structuration & 1K--20K   & 0.42 & 0.82 & 35 \\
+4. Late plateau  & 30K--143K & 0.18 & 0.70 & 7 \\
+\bottomrule
+\end{tabular}
+
+\vspace{12pt}
+\footnotesize
+\textbf{Phase 1:} Identity everywhere.\\
+\textbf{Phase 2:} Rapid departure from $I$; spike collapse.\\
+\textbf{Phase 3:} Off-diagonal structuration; basis expands.\\
+\textbf{Phase 4:} Slow convergence; $\kappa$ continues falling.
+\end{column}
+\begin{column}{0.55\textwidth}
+\includegraphics[width=\textwidth]{figures/summary_evolution.png}
+\end{column}
+\end{columns}
+\end{frame}
+
+% ===================================================================
+\begin{frame}{Finding 6: Deep Layers Stay Near-Isometric}
+\begin{columns}[T]
+\begin{column}{0.38\textwidth}
+\vspace{6pt}
+$ a_\ell \approx 1.0,\; \kappa_\ell > 0.96 $ \\
+for layers 5--10 at \emph{all} training stages.
+
+\vspace{12pt}
+\begin{itemize}
+\item The ``motor band'' remains near-identity
+\item Late layers form a \textbf{stable readout channel}
+\item Whatever the early layers learn, late layers preserve the skip connection
+\item \textbf{Consistent} with the workspace picture
+\end{itemize}
+\end{column}
+\begin{column}{0.58\textwidth}
+\includegraphics[width=\textwidth]{figures/spectral_evolution.png}
+\end{column}
+\end{columns}
+\end{frame}
+
+% ===================================================================
+\begin{frame}{Finding 7: J-Lens $\perp$ Translation}
+\begin{columns}[T]
+\begin{column}{0.38\textwidth}
+\vspace{6pt}
+WMT14 fr-en, 3003 examples, 153 checkpoints.
+
+\vspace{6pt}
+\small
+\begin{tabular}{lcc}
+\toprule
+Task & Best $|\rho|$ & Gap \\
+\midrule
+ARC-Easy (compr.)  & \textbf{0.90} & -- \\
+WinoGrande (compr.)& \textbf{0.90} & -- \\
+BLEU (transl.)    & 0.61 & \textbf{1.48$\times$} \\
+TER (transl.)     & 0.58 & \textbf{1.55$\times$} \\
+\bottomrule
+\end{tabular}
+
+\vspace{12pt}
+\textbf{Hypothesis:} Jspace = working memory. Translation computation happens elsewhere (MLP blocks).
+\end{column}
+\begin{column}{0.58\textwidth}
+\includegraphics[width=\textwidth]{figures/wmt_correlation_heatmap.png}
+\end{column}
+\end{columns}
+\end{frame}
+
+% ===================================================================
+\begin{frame}{Findings 8--9: Spike Count and FCR}
+\begin{columns}[T]
+\begin{column}{0.48\textwidth}
+\vspace{6pt}
+\textbf{Finding 8: Spike count $\approx$ discrete $a_0$}
+
+\vspace{6pt}
+$n_{\text{spikes},0}$ and $a_0$ have nearly identical correlation profiles ($|\rho| \approx 0.89$--$0.90$).
+
+\vspace{6pt}
+\textbf{Layer-dependent sign flip:}
+\begin{itemize}
+\item $n_0$: \emph{negative} $\rho$ (shallow spikes at init = identity artifact)
+\item $n_5$: \emph{positive} $\rho$ ($+0.86$ with LAMBADA; deep spikes = routing)
+\end{itemize}
+
+\includegraphics[width=0.9\textwidth]{figures/n_spikes_L0_vs_sciq.png}
+\end{column}
+\begin{column}{0.48\textwidth}
+\vspace{6pt}
+\textbf{Finding 9: FCR cleans up $\kappa$}
+
+\vspace{6pt}
+$\operatorname{FCR} = (1-\kappa)/\kappa$ avoids saturation at both ends.
+
+\small
+\begin{tabular}{lcc}
+\toprule
+Step & $\kappa_0$ & FCR \\
+\midrule
+1     & 0.971 & 0.030 \\
+1K    & 0.826 & 0.211 \\
+30K   & 0.691 & 0.447 \\
+143K  & 0.392 & 1.549 \\
+\bottomrule
+\end{tabular}
+
+\vspace{6pt}
+FCR can grow unboundedly as structured computation accumulates and per-prompt variance increases.
+
+\includegraphics[width=0.9\textwidth]{figures/overlap_vs_fcr.png}
+\end{column}
+\end{columns}
+\end{frame}
+
+% ===================================================================
+\begin{frame}{Finding 10: Metric Ranking}
+\begin{columns}[T]
+\begin{column}{0.45\textwidth}
+\vspace{6pt}
+Mean $|\rho|$ across 8 benchmarks, all layers:
+
+\small
+\begin{tabular}{lcc}
+\toprule
+Rank & Metric & Mean $|\rho|$ \\
+\midrule
+1 & Spike count      & \textbf{0.862} \\
+2 & $\mathbb{E}[\operatorname{tr}(J^\top J)]$ & 0.844 \\
+3 & Identity $a$     & 0.834 \\
+4 & Coherence $\kappa$ & 0.783 \\
+5 & Power-law $\alpha$ & 0.674 \\
+6 & Effective rank   & 0.398 \\
+\bottomrule
+\end{tabular}
+
+\vspace{6pt}
+\begin{itemize}
+\item $\kappa$ is \textbf{not} the top predictor
+\item $a$ and spike count both beat $\kappa$ by significant margins
+\item Pearson $r$ confirms these relationships are largely linear
+\end{itemize}
+\end{column}
+\begin{column}{0.52\textwidth}
+\includegraphics[width=\textwidth]{figures/metric_race_per_benchmark.png}
+\end{column}
+\end{columns}
+\end{frame}
+
+% ===================================================================
+\section{Synthesis}
+
+\begin{frame}{What is the J-Lens Workspace?}
+\begin{enumerate}
+\item \textbf{The workspace is a stable subspace.}
+Dominant eigendirections of $\bar{J}$ are present from init (overlap $\approx 1.0$ across all checkpoints). Training changes \emph{energy}, not geometry.
+
+\item \textbf{The workspace develops a depth gradient.}
+$\kappa(\ell)$: flat at init ($\approx 0.94$), graded at convergence (0.37 sensory $\to$ 0.97 motor). The gradient \emph{is} the workspace.
+
+\item \textbf{$a_0$ is the strongest single predictor.}
+Identity coefficient drops $1.00 \to 0.17$ near-monotonically. Captures ``computation learned'' in one scalar.
+
+\item \textbf{$\alpha \approx 0.44$ shows strong inter-block alignment.}
+12-layer chain behaves spectrally like $\sim 1.2$ independent factors. Universal across model scales.
+
+\item \textbf{The workspace is working memory, not computation.}
+Translation correlates 1.5$\times$ weaker than comprehension with J-lens metrics.
+
+\item \textbf{$\kappa$ is a flawed order parameter.}
+Better alternatives: overlap (true subspace stability), FCR (unbounded fluctuation ratio), $a$ (computation learned), $\alpha$ (alignment).
+\end{enumerate}
+\end{frame}
+
+% ===================================================================
+\begin{frame}{Key Unanswered Questions}
+\begin{enumerate}
+\item \textbf{What determines the stable subspace?}
+Why these 100--200 particular directions? Token embedding geometry? Weight initialization?
+
+\item \textbf{What lies beyond the Jacobian workspace?}
+Translation computation in MLP blocks, cross-lingual attention. The J-lens captures \emph{routing} through residual stream, not \emph{transformation} within blocks.
+
+\item \textbf{Can we predict $\alpha \approx 0.44$ from first principles?}
+Appears universal. Maximum-entropy argument? Free-energy minimization?
+
+\item \textbf{What triggers the identity collapse (steps 64--128)?}
+$a_0$ drops $0.95 \to 0.84$, spikes collapse $164 \to 143$. Phase transition in loss landscape?
+
+\item \textbf{Why does effective rank drain non-monotonically?}
+Collapse $\to$ rebound $\to$ prune. Three dynamical regimes, no existing theory.
+\end{enumerate}
+\end{frame}
+
+% ===================================================================
+\section{Reproducibility}
+
+\begin{frame}{Pipeline and Resources}
+\begin{block}{Data Pipeline}
+\begin{enumerate}
+\item Pythia-160M-deduped: 153 checkpoints (step 1--143,000)
+\item 1000 wikitext prompts per checkpoint (\texttt{prompt\_pythia.py}, seed=42)
+\item Jacobian estimation via \texttt{anthropics/jacobian-lens} v0.1.3 (\texttt{\_bridge.py})
+\item 8-GPU SLURM array sweep (\texttt{sweep\_upstream.sh})
+\item Cross-prompt overlap: separate prompt seed=123, 27 checkpoints (\texttt{sweep\_overlap.sh})
+\item WMT14 fr-en eval: custom inference + sacreBLEU (\texttt{eval\_wmt.py})
+\item Benchmark scores: 26 EleutherAI pre-computed eval JSONs (\texttt{prepare\_eval\_data.py})
+\end{enumerate}
+\end{block}
+
+\begin{block}{Key Files}
+\footnotesize
+\begin{tabular}{ll}
+\texttt{docs/jlens\_metrics.tex} & Full LaTeX metric dictionary (definitions, motivations, bibliography) \\
+\texttt{docs/PROGRESS.md} & Running log of results and next steps \\
+\texttt{docs/BENCHMARKS.md} & Benchmark descriptions and score ranges \\
+\texttt{docs/REPORT.md} & Markdown version of this report \\
+\texttt{figures/} & 29 publication-quality plots \\
+\texttt{results/step*/} & Per-checkpoint HDF5 storage ($\sim$10.4 GB) \\
+\texttt{tests/} & 71 tests (accumulator, spectra, pipeline, CLI, storage) --- all passing \\
+\end{tabular}
+\end{block}
+\end{frame}
+
+% ===================================================================
+\section{}
+
+\begin{frame}[plain]
+\centering
+\Huge
+\textbf{Merci.}
+
+\vspace{24pt}
+\large
+\url{https://github.com/anthropics/jacobian-lens}
+
+\vspace{12pt}
+\normalsize
+J-Lens × Pythia-160M · 153 checkpoints · 10 findings · 29 figures
+\end{frame}
+
+\end{document}
