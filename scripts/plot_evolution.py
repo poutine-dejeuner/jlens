@@ -89,11 +89,19 @@ def power_law_alpha_matrix(results, steps):
     return M
 
 
-def spike_count_matrix(results, steps, n_prompts=1000, d_model=768):
-    """Count spikes (> 3× MP bulk edge) for every (step, layer)."""
+def spike_count_matrix(results, steps):
+    """Count spikes (> 3× MP bulk edge) for every (step, layer).
+
+    Reads d_model and n_prompts from stored metadata so it works
+    for any model size (not just Pythia-160M).
+    """
+    # Per-checkpoint parameters (may differ if config varied)
+    sample = results[steps[0]]
+    d_model = sample["spectral"]["d_model"]
+    n_prompts = sample["spectral"]["n_prompts"]
     q = n_prompts / d_model
     bulk_edge = (1 + np.sqrt(q)) ** 2
-    threshold = 3 * bulk_edge  # ≈ 12.8 for n=1000, d=768
+    threshold = 3 * bulk_edge
 
     n_layers = results[steps[0]]["spectral"]["n_layers"]
     M = np.full((len(steps), n_layers), np.nan)
@@ -131,8 +139,26 @@ def make_dashboard(results_dir: Path, output_dir: Path):
     results = load_all(results_dir)
     steps = steps_array(results)
     n_steps = len(steps)
-    n_layers = results[steps[0]]["spectral"]["n_layers"]
-    print(f"  {n_steps} checkpoints, {n_layers} layers")
+    sample = results[steps[0]]
+    n_layers = sample["spectral"]["n_layers"]
+    d_model = sample["spectral"]["d_model"]
+    d_model = sample["spectral"].get("d_model", 768)
+    # Model label from d_model or stored model_id
+    model_id = sample["spectral"].get("model_id", "")
+    if not model_id:
+        # Fallback: infer from d_model (Pythia family mapping)
+        D_TO_NAME = {
+            768: "Pythia-160M",
+            1024: "Pythia-410M",
+            2048: "Pythia-1.4B",
+            2560: "Pythia-2.8B",
+            4096: "Pythia-6.9B",
+            5120: "Pythia-12B",
+        }
+        model_label = D_TO_NAME.get(d_model, f"Pythia-d{d_model}")
+    else:
+        model_label = model_id.split("/")[-1] if "/" in model_id else model_id
+    print(f"  {n_steps} checkpoints, {n_layers} layers, d={d_model}, model={model_label}")
 
     # ── Precompute all matrices ──────────────────────────────────────────
     print("Precomputing metrics...")
@@ -152,7 +178,7 @@ def make_dashboard(results_dir: Path, output_dir: Path):
     # ── Figure 1: Coherence κℓ vs depth colored by training phase ────────
     print("Plotting: coherence evolution...")
     fig1, axes1 = plt.subplots(2, 2, figsize=(14, 12))
-    fig1.suptitle("Spectral Evolution of the Jacobian Lens (J̄ℓ) — Pythia-160M, 153 checkpoints",
+    fig1.suptitle(f"Spectral Evolution of the Jacobian Lens (J̄ℓ) — {model_label}, {n_steps} checkpoints",
                   fontsize=15, fontweight="bold", y=0.99)
 
     # Panel A: Coherence κℓ vs layer, grouped by training phase
@@ -241,7 +267,7 @@ def make_dashboard(results_dir: Path, output_dir: Path):
     # ── Figure 2: Heatmaps (coherence, a_coeff, eff_rank, pl_alpha) ──────
     print("Plotting: heatmaps...")
     fig2, axes2 = plt.subplots(2, 2, figsize=(16, 12))
-    fig2.suptitle("Spectral metrics vs (layer, training step) — Pythia-160M",
+    fig2.suptitle(f"Spectral metrics vs (layer, training step) — {model_label}",
                   fontsize=14, fontweight="bold")
 
     heatmap_configs = [
@@ -280,7 +306,7 @@ def make_dashboard(results_dir: Path, output_dir: Path):
     key_layers = [0, 2, 4, 6, 8, 10]
     n_k = len(key_layers)
     fig3, axes3 = plt.subplots(3, 2, figsize=(14, 16))
-    fig3.suptitle("Per-layer spectral metrics across training — Pythia-160M",
+    fig3.suptitle(f"Per-layer spectral metrics across training — {model_label}",
                   fontsize=14, fontweight="bold")
 
     for idx, layer in enumerate(key_layers):
@@ -501,5 +527,4 @@ if __name__ == "__main__":
     parser.add_argument("--output-dir", default="figures")
     args = parser.parse_args()
 
-    d_model = 768
     make_dashboard(Path(args.results_dir), Path(args.output_dir))

@@ -17,8 +17,10 @@ checkpoints.
 | Task | Command / File |
 |---|---|
 | List available checkpoints | `uv run python -c "from jlens.checkpoint_manager import get_checkpoint_steps; print(get_checkpoint_steps(1, 143000))"` |
-| Full array job (153 checkpoints, 8 GPUs) | `sbatch scripts/run_full.sh` |
-| Single checkpoint (interactive) | `uv run python -m jlens.cli run --checkpoints 143000 --n-prompts 100` |
+| **Pythia-160M**: Full array job (153 ckpts, 8 GPUs) | `sbatch scripts/run_full.sh` |
+| **Pythia-12B**: Full array job (154 ckpts, 8 GPUs) | `sbatch scripts/run_full_12b.sh` |
+| **Pythia-12B**: Single checkpoint test | `sbatch scripts/run_single_12b.sh` |
+| Single checkpoint (interactive) | `uv run python -m jlens.cli run --checkpoints 143000 --n-prompts 10` |
 | Resume (skip completed) | Same command — `is_checkpoint_done` skips existing `stepXXXX/` dirs |
 | Check what's done | `ls -d results/step*/` |
 
@@ -45,10 +47,18 @@ sbatch scripts/run_full.sh
 ```
 This splits across 8 array tasks, each processing ~19 checkpoints.
 
-**Single checkpoint test:**
+**Pythia-12B full run (154 checkpoints × 50 prompts):**
 ```bash
-sbatch scripts/run_single.sh
+sbatch scripts/run_full_12b.sh
 ```
+Uses dim_batch=128, max_seq_len=64.  ~7.5 GB/checkpoint, ~1.2 TB total.
+Writes HDF5 to local scratch (`/tmp`) first, then moves to NFS.
+
+**Pythia-12B single checkpoint test:**
+```bash
+sbatch scripts/run_single_12b.sh
+```
+Tests step 143000 with 10 prompts.  ~5 min.
 
 **Resume missing (after partial completion):**
 ```bash
@@ -62,12 +72,13 @@ Check queue: `ssh cursor squeue -u $USER`
 ```
 uv run python -m jlens.cli run \
     --model-id "EleutherAI/pythia-160m-deduped" \
-    --dtype float16 \              # float16, bfloat16, or float32
+    --dtype float16 \              # float16, bfloat16, or float32 (use float16 on B300)
     --n-prompts 1000 \             # prompts per checkpoint
     --max-seq-len 128 \            # token sequence length
     --prompt-seed 42 \             # seed for prompt shuffling
     --dim-batch 8 \                # output dims per backward pass (VRAM tradeoff)
     --results-dir results \        # output directory
+    --scratch-dir /tmp/jlens \     # local fast storage for HDF5 writes before NFS move
     --checkpoints 143000 \         # comma-separated or use --start/--end
     --layers 0,5,10                # specific layers (or omit for all)
 ```

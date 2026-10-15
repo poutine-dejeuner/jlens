@@ -31,6 +31,7 @@ def save_checkpoint_result(
     step: int,
     stats: dict,
     spectral: dict,
+    scratch_dir: Path | None = None,
 ) -> Path:
     """Save checkpoint results to HDF5.
 
@@ -42,22 +43,27 @@ def save_checkpoint_result(
           metadata.json  # Summary metadata
 
     Args:
-        results_dir: Base results directory
-        step: Training step
-        stats: Accumulator output (jbar, jtj_gram, coherence, etc.)
-        spectral: Spectral analysis output (eigenvalues, q_eff, etc.)
+        results_dir: Base results directory (may be NFS).
+        step: Training step.
+        stats: Accumulator output (jbar, jtj_gram, coherence, etc.).
+        spectral: Spectral analysis output (eigenvalues, q_eff, etc.).
+        scratch_dir: Optional local fast storage.  If set, HDF5 files
+            are written here first then moved to results_dir for fast
+            NFS writes.
 
     Returns:
         Path to the checkpoint results directory.
     """
     step_dir = results_dir / f"step{step:04d}"
-    step_dir.mkdir(parents=True, exist_ok=True)
+    write_dir = (scratch_dir / f"step{step:04d}") if scratch_dir else step_dir
+    write_dir.mkdir(parents=True, exist_ok=True)
 
     # Save stats
-    with h5py.File(step_dir / "stats.h5", "w") as f:
+    with h5py.File(write_dir / "stats.h5", "w") as f:
         n_layers = len(stats["jbar"])
         f.attrs["n_prompts"] = stats["n"]
         f.attrs["n_layers"] = n_layers
+        f.attrs["model_id"] = stats.get("model_id", "")
 
         for i in range(n_layers):
             grp = f.create_group(f"layer_{i}")
@@ -76,11 +82,12 @@ def save_checkpoint_result(
             grp.attrs["fcr"] = _or_nan(stats.get("fcr", [None] * n_layers)[i])
 
     # Save spectral results
-    with h5py.File(step_dir / "spectra.h5", "w") as f:
+    with h5py.File(write_dir / "spectra.h5", "w") as f:
         n_layers = spectral["n_layers"]
         f.attrs["n_layers"] = n_layers
         f.attrs["d_model"] = spectral["d_model"]
         f.attrs["n_prompts"] = spectral["n_prompts"]
+        f.attrs["model_id"] = spectral.get("model_id", "")
 
         for i in range(n_layers):
             grp = f.create_group(f"layer_{i}")
@@ -110,8 +117,16 @@ def save_checkpoint_result(
         "d_model": spectral["d_model"],
         "n_prompts": spectral["n_prompts"],
     }
-    with open(step_dir / "metadata.json", "w") as f:
+    with open(write_dir / "metadata.json", "w") as f:
         json.dump(metadata, f, indent=2)
+
+    # Move from scratch to results if using scratch
+    if scratch_dir:
+        import shutil
+        step_dir.mkdir(parents=True, exist_ok=True)
+        for name in ["stats.h5", "spectra.h5", "metadata.json"]:
+            shutil.move(str(write_dir / name), str(step_dir / name))
+        write_dir.rmdir()
 
     logger.info(f"Saved results for step {step} to {step_dir}")
     return step_dir
@@ -164,6 +179,7 @@ def load_checkpoint_result(
             fcr.append(grp.attrs.get("fcr", None))
 
         result["stats"] = {
+            "model_id": f.attrs.get("model_id", ""),
             "n": n_prompts,
             "jbar": jbar,
             "jtj_gram": jtj_gram,
@@ -213,6 +229,7 @@ def load_checkpoint_result(
             "n_layers": n_layers,
             "d_model": f.attrs["d_model"],
             "n_prompts": f.attrs["n_prompts"],
+            "model_id": f.attrs.get("model_id", ""),
             "eigenvalues": eigenvalues,
             "sigma_eigenvalues": sigma_eigenvalues,
             "coherence": spectral_coherence,
@@ -226,6 +243,112 @@ def load_checkpoint_result(
         }
 
     return result
+
+
+def save_thought_manifold(
+    results_dir: Path,
+    step: int,
+    manifold: dict,
+    scratch_dir: Path | None = None,
+) -> Path:
+    """Save thought manifold results to HDF5.
+
+    Files written to step_dir/manifold.h5:
+        datasets: eigenvalues, eigenvectors, explained_variance_ratio,
+                  singular_values, representations
+        attrs: centered, V, d, model_id, step
+    Also writes metadata.json alongside HDF5.
+
+    Args:
+        results_dir: Base results directory.
+        step: Training step (or 0 for non-checkpointed models).
+        manifold: Output from thought_manifold_pipeline / compute_similarity_eigenvectors.
+        scratch_dir: Optional local fast storage for NFS efficiency.
+
+    Returns:
+        Path to the step directory.
+    """
+    step_dir = results_dir / f"step{step:04d}"
+    write_dir = (scratch_dir / f"step{step:04d}") if scratch_dir else step_dir
+    write_dir.mkdir(parents=True, exist_ok=True)
+
+    with h5py.File(write_dir / "manifold.h5", "w") as f:
+        f.create_dataset("eigenvalues", data=manifold["eigenvalues"])
+        f.create_dataset("eigenvectors", data=manifold["eigenvectors"])
+        f.create_dataset("explained_variance_ratio",
+                         data=manifold["explained_variance_ratio"])
+        f.create_dataset("singular_values", data=manifold["singular_values"])
+
+        if "representations" in manifold:
+            f.create_dataset("representations", data=manifold["representations"])
+
+        f.attrs["centered"] = manifold.get("centered", True)
+        f.attrs["V"] = manifold.get("V", 0)
+        f.attrs["d"] = manifold.get("d", 0)
+        f.attrs["model_id"] = manifold.get("model_id", "")
+        f.attrs["step"] = step
+        f.attrs["k"] = len(manifold["eigenvalues"])
+
+    # Metadata
+    metadata = {
+        "step": step,
+        "model_id": manifold.get("model_id", ""),
+        "revision": manifold.get("revision", ""),
+        "V": manifold.get("V", 0),
+        "d": manifold.get("d", 0),
+        "k": len(manifold["eigenvalues"]),
+        "centered": manifold.get("centered", True),
+    }
+    with open(write_dir / "metadata.json", "w") as f:
+        json.dump(metadata, f, indent=2)
+
+    if scratch_dir:
+        import shutil
+        step_dir.mkdir(parents=True, exist_ok=True)
+        for name in ["manifold.h5", "metadata.json"]:
+            shutil.move(str(write_dir / name), str(step_dir / name))
+        write_dir.rmdir()
+
+    logger.info(f"Saved thought manifold for step {step} to {step_dir}")
+    return step_dir
+
+
+def load_thought_manifold(
+    results_dir: Path,
+    step: int,
+) -> dict | None:
+    """Load thought manifold results from HDF5.
+
+    Returns:
+        Dict matching compute_similarity_eigenvectors output, or None if not found.
+    """
+    step_dir = results_dir / f"step{step:04d}"
+    manifold_path = step_dir / "manifold.h5"
+
+    if not manifold_path.exists():
+        return None
+
+    with h5py.File(manifold_path, "r") as f:
+        result = {
+            "eigenvalues": np.array(f["eigenvalues"]),
+            "eigenvectors": np.array(f["eigenvectors"]),
+            "explained_variance_ratio": np.array(f["explained_variance_ratio"]),
+            "singular_values": np.array(f["singular_values"]),
+            "centered": bool(f.attrs.get("centered", True)),
+            "V": int(f.attrs.get("V", 0)),
+            "d": int(f.attrs.get("d", 0)),
+        }
+        if "representations" in f:
+            result["representations"] = np.array(f["representations"])
+
+    return result
+
+
+def is_thought_manifold_done(results_dir: Path | str, step: int) -> bool:
+    """Check if thought manifold has been computed for a step."""
+    results_dir = Path(results_dir)
+    step_dir = results_dir / f"step{step:04d}"
+    return (step_dir / "manifold.h5").exists()
 
 
 def is_checkpoint_done(results_dir: Path | str, step: int, require_overlap: bool = False) -> bool:

@@ -21,9 +21,10 @@ class PipelineConfig:
     n_prompts: int = 1000
     max_seq_len: int = 256
     prompt_seed: int = 42
+    random_tokens: bool = False  # use uniformly random token sequences instead of wikitext
 
     # Overlap (cross-prompt eigenvector overlap)
-    overlap_seed: int = 123
+    overlap_seed: int | None = None
     overlap_n_prompts: int | None = None  # defaults to n_prompts
 
     # Checkpoints
@@ -39,6 +40,7 @@ class PipelineConfig:
     # Output
     results_dir: Path = Path("results")
     cache_dir: Optional[Path] = None  # model cache
+    scratch_dir: Optional[Path] = None  # local fast storage for HDF5 writes before NFS move
 
     # SLURM
     slurm_gpus: int = 1

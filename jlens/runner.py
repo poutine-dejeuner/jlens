@@ -118,12 +118,15 @@ def run_checkpoint(
 
         # Get accumulated stats
         stats = accum.get_all_stats()
+        stats["model_id"] = config.model_id
 
         # Spectral analysis
         spectral = analyze_checkpoint(stats)
+        spectral["model_id"] = config.model_id
 
         # Save
-        save_checkpoint_result(config.results_dir, step, stats, spectral)
+        save_checkpoint_result(config.results_dir, step, stats, spectral,
+                               scratch_dir=config.scratch_dir)
 
         # Cleanup
         unload_checkpoint(hf_model, tokenizer)
@@ -183,16 +186,25 @@ def run_pipeline(config: PipelineConfig) -> None:
         dtype=getattr(torch, config.model_dtype),
         cache_dir=config.cache_dir,
     )
-    from .prompts import load_prompts_text
-    prompts = load_prompts_text(
-        tokenizer,
-        n_prompts=config.n_prompts,
-        max_seq_len=config.max_seq_len,
-        dataset_name=config.prompt_dataset,
-        dataset_config=config.prompt_config,
-        dataset_split=config.prompt_split,
-        seed=config.prompt_seed,
-    )
+    if config.random_tokens:
+        from .prompts import generate_random_prompts
+        prompts = generate_random_prompts(
+            tokenizer,
+            n_prompts=config.n_prompts,
+            seq_len=config.max_seq_len,
+            seed=config.prompt_seed,
+        )
+    else:
+        from .prompts import load_prompts_text
+        prompts = load_prompts_text(
+            tokenizer,
+            n_prompts=config.n_prompts,
+            max_seq_len=config.max_seq_len,
+            dataset_name=config.prompt_dataset,
+            dataset_config=config.prompt_config,
+            dataset_split=config.prompt_split,
+            seed=config.prompt_seed,
+        )
 
     # Optionally load overlap prompts (different seed, same dataset)
     overlap_prompts = None
@@ -329,13 +341,16 @@ def run_checkpoint_with_overlap(
 
         # Main stats from the primary accumulator
         stats = accum_main.get_all_stats()
+        stats["model_id"] = config.model_id
 
         # Spectral analysis on main stats (includes sigma, fcr)
         spectral = analyze_checkpoint(stats)
         spectral["eigenvector_overlap"] = overlap_list
+        spectral["model_id"] = config.model_id
 
         # Save
-        save_checkpoint_result(config.results_dir, step, stats, spectral)
+        save_checkpoint_result(config.results_dir, step, stats, spectral,
+                               scratch_dir=config.scratch_dir)
 
         # Cleanup
         unload_checkpoint(hf_model, tokenizer)

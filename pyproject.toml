@@ -19,6 +19,11 @@ dependencies = [
     "vllm>=0.26.0",
     "lm-eval>=0.4.13",
     "sacrebleu>=2.6.0",
+    "gudhi>=3.13.0",
+    "ripser>=0.6.15",
+    "persim>=0.3.8",
+    "wandb>=0.30.0",
+    "cupy-cuda12x>=14.2.0",
 ]
 
 [project.scripts]

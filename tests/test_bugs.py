@@ -265,34 +265,161 @@ def _make_stats(n_layers, d_model, population_mask=None):
     rng = np.random.default_rng(123)
     jbar = []
     jtj_gram = []
+    sigma_gram = []
     coherence = []
     a_coeff = []
     r_norm = []
     tr_jtj_mean = []
+    fcr = []
 
     for i in range(n_layers):
         if population_mask[i]:
             m = rng.normal(0, 0.1, (d_model, d_model)) + np.eye(d_model) * 0.7
             jbar.append(m)
             jtj_gram.append(m.T @ m)
+            sigma_gram.append(m.T @ m * 0.1)  # small fluctuation
             coherence.append(float(np.trace(m.T @ m) / np.sum(m**2)))
             a_coeff.append(float(np.trace(m) / d_model))
             r_norm.append(0.1)
             tr_jtj_mean.append(float(np.sum(m**2)))
+            fcr.append(0.1)
         else:
             jbar.append(None)
             jtj_gram.append(None)
+            sigma_gram.append(None)
             coherence.append(None)
             a_coeff.append(None)
             r_norm.append(None)
             tr_jtj_mean.append(None)
+            fcr.append(None)
 
     return {
         "n": 10,
         "jbar": jbar,
         "jtj_gram": jtj_gram,
+        "sigma_gram": sigma_gram,
         "coherence": coherence,
         "a_coeff": a_coeff,
         "r_norm": r_norm,
         "tr_jtj_mean": tr_jtj_mean,
+        "fcr": fcr,
     }
+
+
+# ---------------------------------------------------------------------------
+# 12B-scale fixes
+# ---------------------------------------------------------------------------
+
+class TestMPBulkFitLargeD:
+    """fit_mp_bulk must handle large d_model (e.g., 5120 for Pythia-12B).
+    The old max_exclude=min(n//5, 200) capped at 200 of 5120 eigenvalues.
+    """
+
+    def test_many_spikes_handled(self):
+        """With d=5120, hundreds of spikes must not break the fit."""
+        from jlens.spectra import fit_mp_bulk
+
+        rng = np.random.default_rng(42)
+        d = 5120
+
+        # Build a spectrum with many large spikes (untrained-like)
+        # MP bulk ~ chi²(d) scaled, then add 500 spikes above bulk edge
+        bulk = rng.chisquare(2, d) * 0.5
+        spikes = rng.exponential(10, 500) + 5.0
+        eigvals = np.sort(np.concatenate([bulk, spikes]))[::-1]
+
+        result = fit_mp_bulk(eigvals)
+        assert not np.isnan(result["sigma2"]), "sigma2 should not be NaN"
+        assert not np.isnan(result["q_eff"]), "q_eff should not be NaN"
+        assert result["n_spikes"] > 100, \
+            f"Expected >100 spikes with 500 outliers, got {result['n_spikes']}"
+        assert result["ks_statistic"] < 0.5, \
+            f"KS statistic {result['ks_statistic']:.3f} too high"
+
+    def test_exponential_candidates_cover_full_range(self):
+        """The candidate schedule should cover up to n//4 with good density."""
+        d = 5120
+        n = d  # n eigenvalues
+        max_exclude = n // 4  # 1280
+
+        # Replicate the candidate generation logic
+        dense = list(range(0, min(21, max_exclude + 1)))
+        sparse = np.unique(
+            np.geomspace(21, max_exclude, num=min(20, max_exclude - 20))
+            .astype(int)
+        ).tolist()
+        candidates = dense + sparse
+
+        assert candidates[0] == 0, "Must start at 0"
+        assert candidates[-1] == max_exclude, f"Must end at {max_exclude}"
+        assert len(candidates) >= 20, f"Too few candidates: {len(candidates)}"
+        assert len(candidates) <= 41, f"Too many candidates: {len(candidates)}"
+
+
+class TestSpikeCountMatrixModelAgnostic:
+    """spike_count_matrix must read d_model and n_prompts from metadata,
+    not hardcode 768/1000."""
+
+    def test_reads_d_model_from_metadata(self):
+        """spike_count_matrix uses stored d_model, not hardcoded 768."""
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+        from plot_evolution import spike_count_matrix
+
+        d_model = 2048
+        n_layers = 4
+        stats = _make_stats(n_layers, d_model, [True] * n_layers)
+        spectral = analyze_checkpoint(stats)
+
+        # Simulate what load_checkpoint_result returns
+        fake_results = {
+            1000: {
+                "stats": stats,
+                "spectral": spectral,
+            }
+        }
+        steps = np.array([1000])
+
+        M = spike_count_matrix(fake_results, steps)
+        assert M.shape == (1, n_layers)
+        assert not np.isnan(M).all(), "All NaN — threshold probably wrong"
+
+
+class TestScratchDirSave:
+    """save_checkpoint_result must support scratch_dir for NFS efficiency."""
+
+    def test_scratch_dir_used_then_moved(self):
+        """With scratch_dir, files are written there first, then moved."""
+        stats = _make_stats(3, 16, [True, True, True])
+        spectral = analyze_checkpoint(stats)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            results_dir = Path(tmp) / "results"
+            scratch_dir = Path(tmp) / "scratch"
+
+            save_checkpoint_result(
+                results_dir, step=1, stats=stats, spectral=spectral,
+                scratch_dir=scratch_dir,
+            )
+
+            # Results dir must have the files
+            assert (results_dir / "step0001" / "stats.h5").exists()
+            assert (results_dir / "step0001" / "spectra.h5").exists()
+            assert (results_dir / "step0001" / "metadata.json").exists()
+
+            # Scratch dir must be cleaned up
+            assert not scratch_dir.exists() or not any(scratch_dir.iterdir()), \
+                "scratch dir should be empty after move"
+
+    def test_no_scratch_dir_still_works(self):
+        """Backward compat: calling without scratch_dir writes directly."""
+        stats = _make_stats(3, 16, [True, True, True])
+        spectral = analyze_checkpoint(stats)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            results_dir = Path(tmp)
+            save_checkpoint_result(
+                results_dir, step=1, stats=stats, spectral=spectral,
+            )
+            assert (results_dir / "step0001" / "stats.h5").exists()

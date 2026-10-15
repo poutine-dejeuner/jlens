@@ -148,10 +148,21 @@ def fit_mp_bulk(eigvals: np.ndarray) -> dict:
     best_ks = np.inf
     working = eigvals_pos.copy()
 
-    # Try progressively excluding more top eigenvalues
-    max_exclude = min(n // 5, 200)  # at most 20% or 200 eigenvalues
+    # Try progressively excluding more top eigenvalues.
+    # Use exponentially spaced candidates for efficiency with large d.
+    max_exclude = n // 4  # up to 25% (allow many spikes for large models)
+    if max_exclude <= 20:
+        candidates = list(range(0, max_exclude + 1))
+    else:
+        # Exponential schedule: start dense (1-step), then sparse
+        dense = list(range(0, min(21, max_exclude + 1)))
+        sparse = np.unique(
+            np.geomspace(21, max_exclude, num=min(20, max_exclude - 20))
+            .astype(int)
+        ).tolist()
+        candidates = dense + sparse
 
-    for n_exclude in range(0, max_exclude + 1, max(1, max_exclude // 20)):
+    for n_exclude in candidates:
         if n_exclude > 0:
             working = eigvals_pos[n_exclude:]
 

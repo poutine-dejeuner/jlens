@@ -105,7 +105,11 @@ This is a fragile hack.  If imports break:
 |---|---|
 | `ModuleNotFoundError: jlens.spectra` | Set `PYTHONPATH=$(pwd)` |
 | Triton JIT compilation error | Already set: `TRITON_BUILD_WITHOUT_CC=1` |
-| CUDA OOM | Reduce `dim_batch` (default 8 → try 4) or `n_prompts` |
+| CUDA OOM | Reduce `dim_batch` or `n_prompts`. For 12B, use `dim_batch=128` |
 | `KeyError` in compare_estimators | Script uses `f["layer_N"]["jbar"][:]`, not `f[str(N)][:]` |
 | Empty layer n_spikes = NaN | Fixed: `_or_nan_int` now converts NaN → -1 |
 | `--prompt-seed` has no effect | Fixed: both `load_prompts` functions now shuffle |
+| `--dtype bfloat16` silent breakage | Fixed: CLI default is now `float16` for B300 safety |
+| MP fit fails for large d_model (12B) | Fixed: max_exclude raised to n//4, exponential search |
+| spike_count_matrix wrong for non-160M | Fixed: reads d_model/n_prompts from metadata |
+| Slow NFS writes for large HDF5 files | Use `--scratch-dir /tmp/jlens` for local-then-move |
