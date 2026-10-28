@@ -35,8 +35,9 @@ def load_checkpoint(
     dtype: torch.dtype = torch.bfloat16,
     cache_dir: Path | None = None,
     device_map: str = "auto",
+    revision_prefix: str = "step",
 ) -> tuple:
-    """Load a Pythia model checkpoint.
+    """Load a model checkpoint at a given training step.
 
     Args:
         model_id: HuggingFace model ID
@@ -44,11 +45,12 @@ def load_checkpoint(
         dtype: Model dtype
         cache_dir: Cache directory for model weights
         device_map: Device map for model parallelism
+        revision_prefix: Branch name prefix (e.g. "step" for Pythia, "stage1-step" for OLMo3)
 
     Returns:
         (model, tokenizer) tuple
     """
-    revision = f"step{step}"
+    revision = f"{revision_prefix}{step}"
     logger.info(f"Loading {model_id} @ {revision}")
 
     kwargs = dict(trust_remote_code=True)

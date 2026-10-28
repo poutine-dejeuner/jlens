@@ -27,7 +27,7 @@ plot_metrics = [
 ]
 
 bm_labels = ["ARC-Easy", "ARC-Chal.", "PIQA", "WinoGrande",
-             "SciQ", "LAMBADA", "LogiQA", "WSC"]
+             "SciQ", "LAMBADA", "WSC", "LogiQA"]
 
 # Compute both correlation matrices
 spearman_mat = np.zeros((len(plot_metrics), len(benchmarks)))
@@ -135,8 +135,8 @@ print("Saved figures/pythia-12b/correlation_delta.png")
 # ── Figure 2: Best scatter plots ──────────────────────────────────────
 top_pairs = [
     ("a_coeff_L0", "arc_easy", "Identity coefficient a (L0)"),
-    ("tr_jtj_L0", "piqa", "Sensitivity tr(J⊤J) (L0)"),
-    ("n_spikes_L0", "sciq", "Spike count (L0)"),
+    ("a_coeff_mean", "lambada_openai", "Identity coefficient a (mean)"),
+    ("coherence_L0", "logiqa", "Coherence (L0)"),
 ]
 
 fig2, axes = plt.subplots(1, 3, figsize=(18, 6))
@@ -177,10 +177,6 @@ plt.close(fig2)
 print("Saved figures/pythia-12b/correlation_scatters.png")
 
 # ── Figure 3: Dual-axis time series — a_coeff vs ARC-Easy ─────────────
-fig3, ax1 = plt.subplots(figsize=(14, 6))
-fig3.suptitle("Training Dynamics (12B): J-lens Identity Coefficient vs ARC-Easy Accuracy",
-              fontsize=13, fontweight="bold")
-
 mkey = "a_coeff_L0"
 bm = "arc_easy"
 mvals = jlens_metrics[mkey]
@@ -193,36 +189,74 @@ bv = bvals[mask]
 color_jlens = "#2196F3"
 color_eval = "#FF5722"
 
-ax1.plot(s, mv, "o-", color=color_jlens, linewidth=2, markersize=7,
-         label=f"J-lens {mkey}")
-ax1.set_xlabel("Training step (log)", fontsize=11)
-ax1.set_ylabel("a — identity coefficient (L0)", color=color_jlens, fontsize=11)
-ax1.tick_params(axis="y", labelcolor=color_jlens)
-ax1.set_xscale("log")
-ax1.grid(True, alpha=0.3)
-
-ax2 = ax1.twinx()
-ax2.plot(s, bv, "s--", color=color_eval, linewidth=2, markersize=7,
-         label="ARC-Easy accuracy")
-ax2.set_ylabel("ARC-Easy accuracy", color=color_eval, fontsize=11)
-ax2.tick_params(axis="y", labelcolor=color_eval)
-
 r_s, p_s = stats.spearmanr(mv, bv)
 r_p, _ = stats.pearsonr(mv, bv)
 sig = "**" if p_s < 0.01 else "*"
-ax1.text(0.02, 0.95,
-         f"Spearman ρ = {r_s:.3f}{sig}\nPearson r = {r_p:.3f}\nn = {len(s)}",
-         transform=ax1.transAxes, fontsize=11, verticalalignment="top",
-         bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5))
 
-lines1, labels1 = ax1.get_legend_handles_labels()
-lines2, labels2 = ax2.get_legend_handles_labels()
-ax1.legend(lines1 + lines2, labels1 + labels2, loc="center right", fontsize=10)
+# ── Figure 3a: symlog x-scale (log + linear hybrid) ──
+fig3a, ax1a = plt.subplots(figsize=(14, 6))
+fig3a.suptitle("Training Dynamics (12B): J-lens Identity Coefficient vs ARC-Easy Accuracy",
+               fontsize=13, fontweight="bold")
 
-fig3.tight_layout()
-fig3.savefig("figures/pythia-12b/identity_vs_arc_easy.png", dpi=200, bbox_inches="tight")
-plt.close(fig3)
+ax1a.plot(s, mv, "o-", color=color_jlens, linewidth=2, markersize=5,
+          label=f"J-lens {mkey}")
+ax1a.set_xlabel("Training step (symlog)", fontsize=11)
+ax1a.set_ylabel("a — identity coefficient (L0)", color=color_jlens, fontsize=11)
+ax1a.tick_params(axis="y", labelcolor=color_jlens)
+ax1a.set_xscale("symlog", linthresh=100)
+ax1a.grid(True, alpha=0.3)
+
+ax2a = ax1a.twinx()
+ax2a.plot(s, bv, "s--", color=color_eval, linewidth=2, markersize=5,
+          label="ARC-Easy accuracy")
+ax2a.set_ylabel("ARC-Easy accuracy", color=color_eval, fontsize=11)
+ax2a.tick_params(axis="y", labelcolor=color_eval)
+
+ax1a.text(0.02, 0.95,
+          f"Spearman ρ = {r_s:.3f}{sig}\nPearson r = {r_p:.3f}\nn = {len(s)}",
+          transform=ax1a.transAxes, fontsize=11, verticalalignment="top",
+          bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5))
+
+lines1a, labels1a = ax1a.get_legend_handles_labels()
+lines2a, labels2a = ax2a.get_legend_handles_labels()
+ax1a.legend(lines1a + lines2a, labels1a + labels2a, loc="center right", fontsize=10)
+
+fig3a.tight_layout()
+fig3a.savefig("figures/pythia-12b/identity_vs_arc_easy.png", dpi=200, bbox_inches="tight")
+plt.close(fig3a)
 print("Saved figures/pythia-12b/identity_vs_arc_easy.png")
+
+# ── Figure 3b: linear x-scale ──
+fig3b, ax1b = plt.subplots(figsize=(14, 6))
+fig3b.suptitle("Training Dynamics (12B): J-lens Identity Coefficient vs ARC-Easy Accuracy (linear)",
+               fontsize=13, fontweight="bold")
+
+ax1b.plot(s, mv, "o-", color=color_jlens, linewidth=2, markersize=7,
+          label=f"J-lens {mkey}")
+ax1b.set_xlabel("Training step", fontsize=11)
+ax1b.set_ylabel("a — identity coefficient (L0)", color=color_jlens, fontsize=11)
+ax1b.tick_params(axis="y", labelcolor=color_jlens)
+ax1b.grid(True, alpha=0.3)
+
+ax2b = ax1b.twinx()
+ax2b.plot(s, bv, "s--", color=color_eval, linewidth=2, markersize=7,
+          label="ARC-Easy accuracy")
+ax2b.set_ylabel("ARC-Easy accuracy", color=color_eval, fontsize=11)
+ax2b.tick_params(axis="y", labelcolor=color_eval)
+
+ax1b.text(0.02, 0.95,
+          f"Spearman ρ = {r_s:.3f}{sig}\nPearson r = {r_p:.3f}\nn = {len(s)}",
+          transform=ax1b.transAxes, fontsize=11, verticalalignment="top",
+          bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5))
+
+lines1b, labels1b = ax1b.get_legend_handles_labels()
+lines2b, labels2b = ax2b.get_legend_handles_labels()
+ax1b.legend(lines1b + lines2b, labels1b + labels2b, loc="center right", fontsize=10)
+
+fig3b.tight_layout()
+fig3b.savefig("figures/pythia-12b/identity_vs_arc_easy_linear.png", dpi=200, bbox_inches="tight")
+plt.close(fig3b)
+print("Saved figures/pythia-12b/identity_vs_arc_easy_linear.png")
 
 # ── Figure 4: Small multiples ──────────────────────────────────────────
 fig4, axes = plt.subplots(3, 3, figsize=(18, 18), constrained_layout=True)
@@ -234,7 +268,7 @@ top_metrics = ["a_coeff_L0", "coherence_L0", "n_spikes_L0",
                "eff_rank_mean", "a_coeff_L5", "coherence_L5"]
 
 plot_bms = ["arc_easy", "arc_challenge", "piqa", "winogrande", "sciq",
-            "lambada_openai", "logiqa", "wsc"]
+            "lambada_openai", "wsc", "logiqa"]
 
 for row_idx, mkey in enumerate(top_metrics[:3]):
     for col_idx, bm in enumerate(plot_bms[:3]):

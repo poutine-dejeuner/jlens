@@ -87,6 +87,7 @@ def run_checkpoint(
         step,
         dtype=dtype,
         cache_dir=config.cache_dir,
+        revision_prefix=config.revision_prefix,
     )
 
     try:
@@ -185,6 +186,7 @@ def run_pipeline(config: PipelineConfig) -> None:
         steps[0],
         dtype=getattr(torch, config.model_dtype),
         cache_dir=config.cache_dir,
+        revision_prefix=config.revision_prefix,
     )
     if config.random_tokens:
         from .prompts import generate_random_prompts

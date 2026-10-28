@@ -1,0 +1,206 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage[margin=1in]{geometry}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{float}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    urlcolor=cyan,
+    citecolor=blue
+}
+
+\title{\textbf{A Free-Probability Transition in Transformer Jacobian Spectra:}\\
+\large From Semicircle at Initialization to Log-Normal After Training}
+\author{}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+The J-Lens framework studies the corpus-averaged Jacobian $\bar{J}_\ell = \mathbb{E}_x[\partial h_{\mathrm{final}}/\partial h_\ell]$ transporting hidden states at layer $\ell$ to the model output, via the spectrum of its Gram matrix $\bar{J}_\ell^\top \bar{J}_\ell$. The standard null model for such spectra is the Marchenko--Pastur (MP) law, appropriate for a single Wishart-type random matrix. We show that MP is a poor description of $\bar{J}_\ell$ at random initialization for all but the deepest layers, and that this is not a fitting artifact: at initialization, $\bar{J}_\ell$ is (to leading order) a product of $\sim\!(L-\ell)$ independent, unitarily-invariant random matrices, which are \emph{asymptotically free} in the sense of Voiculescu. The free central limit theorem predicts that the distribution of $\log\lambda$ for such a product converges to a \emph{semicircle law}, not a Gaussian. We confirm this quantitatively: a two-parameter semicircle-in-$\log\lambda$ model achieves $R^2 \geq 0.997$ (mean, over 35 layers) for Pythia-12B-deduped at steps 1--512, versus $R^2 = 0.887$ for MP and $R^2=0.976$ for log-normal over the same cells. Once training begins, gradient descent breaks the independence/rotational-invariance assumptions underlying freeness, and the semicircle prediction collapses (mean $R^2 = 0.942$ over all later-training cells, falling as low as $0.85$--$0.93$ for shallow layers), while a log-normal model becomes dominant almost everywhere (mean $R^2=0.979$, winning 62\% of all (layer, step) cells overall, and 100\% of cells in a second, independently-trained model, K2-Horizon-32B, for which no near-initialization checkpoint was available). Deep layers ($\ell \geq 28$ of 35) remain MP-consistent at every training step ($R^2 = 0.993$), consistent with the Jacobian there being close to a single near-identity transport. We interpret the whole trajectory as a transition, driven by the breaking of asymptotic freeness during training, from a free-probabilistic regime (semicircle) to a classical-probabilistic regime (log-normal), mediated by the number of independent-matrix factors composing $\bar{J}_\ell$.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%=====================================================================
+\section{Introduction}
+%=====================================================================
+
+The Jacobian lens~\cite{jacobian-lens} computes the corpus-averaged Jacobian
+\begin{equation}
+  \bar{J}_\ell = \frac{1}{N}\sum_{i=1}^N \frac{\partial h_{\mathrm{final}}^{(i)}}{\partial h_\ell^{(i)}} \in \mathbb{R}^{d\times d}
+\end{equation}
+measuring how the hidden state at layer $\ell$ is transported to the model's final hidden state, averaged over $N$ prompts. The spectral diagnostics built on top of $\bar{J}_\ell$ --- effective rank, Marchenko--Pastur (MP) bulk fits, spike counts --- treat the eigenvalues of $\bar{J}_\ell^\top \bar{J}_\ell$ as the object of interest~\cite{marchenko1967}. The MP law is the correct null model for the Gram matrix of a \emph{single} random (Wishart-type) matrix, and it fits the deepest layers of a trained transformer very well. It fits badly, however, at the shallowest layers, and the badness of fit is most extreme at random initialization: at Pythia-12B-deduped step 1, layer 0, the best-fit MP curve has $R^2 = -0.21$ (worse than predicting the mean bin mass).
+
+We show this is not a bug but a direct, quantitatively precise signature of \emph{free probability}. $\bar{J}_\ell$ is (approximately, at initialization) a product of the per-block Jacobians of layers $\ell, \ell+1, \dots, L-1$, each built from independently-initialized, i.i.d.\ Gaussian weight matrices. Such matrices are asymptotically free in the sense of Voiculescu~\cite{voiculescu1991}, and the free central limit theorem~\cite{voiculescu1986} predicts that $\log\lambda$ for a product of many free factors converges to a \textbf{semicircle law}, not a Gaussian (the classical CLT's prediction, corresponding to a log-normal eigenvalue distribution). We test MP, log-normal, and semicircle-in-$\log\lambda$ against every (layer, training step) cell available for two models --- Pythia-12B-deduped (48 steps $\times$ 35 layers) and K2-Horizon-32B (23 checkpoints $\times$ 63 layers) --- and find a clean, theoretically-motivated transition between these three regimes.
+
+%=====================================================================
+\section{Background}
+%=====================================================================
+
+\subsection{The Marchenko--Pastur law}
+
+For an $n\times d$ matrix with i.i.d.\ entries of variance $\sigma^2/d$, the eigenvalues of the $d\times d$ Gram matrix converge, as $n,d\to\infty$ with $q = d/n$ fixed, to the MP density
+\begin{equation}
+  \rho_{\mathrm{MP}}(\lambda) = \frac{1}{2\pi\sigma^2 q \lambda}\sqrt{(\lambda_+-\lambda)(\lambda-\lambda_-)}, \qquad \lambda_\pm = \sigma^2(1\pm\sqrt{q})^2,
+  \label{eq:mp}
+\end{equation}
+supported on $[\lambda_-,\lambda_+]$~\cite{marchenko1967}. This is the appropriate null model for the Gram matrix of a \emph{single} random matrix.
+
+\subsection{Asymptotic freeness and the free CLT}
+
+Voiculescu's asymptotic freeness theorem states that two sequences of independent random matrices become \emph{asymptotically free} as their dimension $\to\infty$, provided they are independent and at least one of each pair is \emph{unitarily invariant} (i.e., its law is unchanged under conjugation $A \mapsto U A U^\dagger$ by an arbitrary unitary/orthogonal matrix)~\cite{voiculescu1991}. This condition is satisfied automatically by any matrix with i.i.d.\ Gaussian entries (Ginibre, Wishart, GOE/GUE), because the Gaussian measure is rotationally invariant.
+
+Freeness is the noncommutative analogue of classical independence, with its own combinatorics (free cumulants in place of classical cumulants) and its own central limit theorem~\cite{voiculescu1986}: normalized sums of free, centered, finite-variance random variables converge not to a Gaussian but to a \textbf{semicircle law},
+\begin{equation}
+  \rho_{\mathrm{sc}}(x) = \frac{2}{\pi R^2}\sqrt{R^2-(x-c)^2}, \qquad x\in[c-R,c+R].
+  \label{eq:semicircle}
+\end{equation}
+For \emph{products} of free, rotationally-invariant matrices, the relevant additive structure lives on the log scale: the singular values of a product multiply, so their logarithms add. If the factors are (to leading order) free and rotationally invariant, the free CLT applies to $\log\lambda = 2\sum_k \log\sigma_k$ of the product, predicting a semicircle for $\log\lambda$, exactly as Eq.~\ref{eq:semicircle} with $x=\log\lambda$. This is the free-probability counterpart of the much more familiar classical result that sums of many i.i.d.\ logs converge to a Gaussian, i.e., a \textbf{log-normal} distribution of $\lambda$ --- which is exactly what the classical (non-free) CLT would predict for the same construction.
+
+\subsection{Why this applies to $\bar{J}_\ell$ at initialization, and why training breaks it}
+
+At random initialization, each transformer block's weight matrices are drawn i.i.d.\ Gaussian, independently across layers. The per-block Jacobian of layer $k$ is (to leading order in the linearization) a function of these weights and therefore also approximately unitarily invariant and independent across $k$. $\bar{J}_\ell$ is a product of such per-block Jacobians for $k=\ell,\dots,L-1$ --- i.e.\ a product of $\sim(L-\ell)$ asymptotically free factors, exactly the setting of \S2.2. Shallow layers ($\ell$ small) have many factors and should show the semicircle prediction strongly; deep layers ($\ell$ close to $L$) have few factors and should remain closer to the single-matrix MP prediction.
+
+Gradient descent breaks this picture: it aligns weights with the data and with each other across layers (feature learning), correlating what was independent and privileging specific directions over the generic rotational invariance that freeness requires. Once this happens, the free CLT's hypotheses no longer hold and the semicircle prediction should degrade, while the product-of-correlated-factors spectrum should drift towards whatever a generic (not-necessarily-free) product-of-matrices central limit theorem predicts on the log scale, i.e., something closer to log-normal.
+
+%=====================================================================
+\section{Methods}
+%=====================================================================
+
+\subsection{Models compared}
+
+For every (layer, checkpoint) cell we fit three two-parameter models by nonlinear least squares against the same binned empirical density (90 log-spaced bins per decade $\times$ 9 decades, probability mass per bin, eigenvalues outside $[10^{-6},10^{3}]$ excluded from the fit but included in the normalization), and report $R^2 = 1 - \mathrm{SSE}/\mathrm{SST}$ over bin masses:
+\begin{itemize}
+  \item \textbf{MP}: Eq.~\ref{eq:mp}, free parameters $(\sigma^2, q)$, $q\in(0,1]$, fit as in \texttt{plot\_mp\_fit\_r2.py}'s \texttt{fit\_mp()} (multi-start least squares over 9 initializations).
+  \item \textbf{Log-normal}: $\log\lambda \sim \mathcal{N}(\mu,\sigma^2)$, free parameters $(\mu,\sigma)$.
+  \item \textbf{Semicircle-in-$\log\lambda$}: Eq.~\ref{eq:semicircle} with $x = \log\lambda$, free parameters $(c, R)$, fit with 3-start least squares over the initial radius scale.
+\end{itemize}
+All three are genuinely two-parameter models, so $R^2$ comparisons between them are not confounded by model complexity.
+
+\subsection{Data}
+
+\begin{itemize}
+  \item \textbf{Pythia-12B-deduped}: 48 pretraining checkpoints (steps 1--143{,}000), 1{,}000 WikiText prompts, $d_{\mathrm{model}}=5{,}120$, 36 transformer layers. The final layer's $\bar{J}_{35}$ is trivially the identity (nothing left to transport) and is excluded, leaving 35 analyzed layers $\times$ 48 steps = 1{,}680 cells.
+  \item \textbf{K2-Horizon-32B}: 23 checkpoints spanning 7 training stages (stage boundaries correspond to data-mixture changes; step numbers restart within each stage), 1{,}000 WikiText prompts, $d_{\mathrm{model}}=5{,}120$, 63 layers, giving 1{,}449 cells. No near-initialization checkpoint was available for this model; the earliest checkpoint used here is already 100{,}000 steps into stage 1.
+\end{itemize}
+
+%=====================================================================
+\section{Results}
+%=====================================================================
+
+\subsection{Pythia-12B-deduped: a sharp regime transition}
+
+Table~\ref{tab:pythia-summary} and Figure~\ref{fig:pythia-heatmap} summarize the full $35\times 48$ grid. At initialization (steps 1--512), the semicircle model is essentially exact across almost every layer (mean $R^2=0.997$), dramatically outperforming both MP ($R^2=0.887$) and log-normal ($R^2=0.976$) over the same cells; at step 1, layer 0, MP achieves $R^2=-0.213$ while semicircle achieves $R^2=0.966$. The transition away from semicircle is abrupt: semicircle is the best-fitting model in 71\% of cells at step 512, but in \emph{zero} cells at step 2{,}000 and beyond. Once training has proceeded past this point (steps $\geq 2{,}000$), log-normal is the best overall model (mean $R^2=0.979$), while deep layers ($\ell\geq 28$ of 35) remain best described by MP at every training step (mean $R^2 = 0.993$), consistent with $\bar{J}_\ell$ there being close to a single near-identity Wishart-type transport with few free factors remaining in the product.
+
+Overall, across all 1{,}680 (layer, step) cells, log-normal is the best-fitting model in 1{,}048 cells (62.4\%), MP in 340 (20.2\%, concentrated in deep layers at any step), and semicircle in 292 (17.4\%, concentrated at initialization across almost all layers).
+
+\begin{table}[H]
+\centering
+\caption{Mean $R^2$ by model and training regime, Pythia-12B-deduped (wikitext).}
+\label{tab:pythia-summary}
+\begin{tabular}{lccc}
+\toprule
+Regime (cells) & MP & Log-normal & Semicircle ($\log\lambda$) \\
+\midrule
+All (1{,}680) & 0.949 & 0.978 & 0.954 \\
+Steps $\leq 512$ (350) & 0.887 & 0.976 & \textbf{0.997} \\
+Steps $\geq 2{,}000$ (1{,}330) & 0.966 & \textbf{0.979} & 0.942 \\
+Deep layers $\ell\geq 28$, all steps (336) & 0.993 & \textbf{0.997} & 0.992 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/pythia_heatmap.png}
+\caption{Pythia-12B-deduped, 35 layers $\times$ 48 checkpoints. \textbf{Left}: best-fitting model per cell (blue = MP, green = log-normal, red = semicircle-in-$\log\lambda$). \textbf{Right}: $R^2$ of the best-fitting model. The semicircle regime (red, left panel) occupies essentially every layer at steps $\leq 512$ and vanishes entirely by step 2{,}000; a narrow MP-dominated band (blue) persists at the deepest layers throughout training.}
+\label{fig:pythia-heatmap}
+\end{figure}
+
+\subsection{K2-Horizon-32B: a trained-only model is uniformly log-normal}
+
+K2-Horizon-32B has no checkpoint close to random initialization in the available archive --- the earliest is already 100{,}000 steps into training stage 1. Under the hypothesis above, we expect such a model to show \emph{no} semicircle regime at all, since the free-probability structure required for it is already broken by the time of the first available checkpoint. This is exactly what we observe (Table~\ref{tab:k2-summary}, Figure~\ref{fig:k2-heatmap}): log-normal is the best-fitting model in \textbf{100\% of all 1{,}449 cells}, MP never wins even in the deepest layers (though it remains a reasonable description there, $R^2\approx 0.86$ at the earliest checkpoint, degrading further with training), and the raw MP fit quality is markedly worse than for Pythia overall (mean $R^2=0.618$), consistent with K2-Horizon-32B's $63$ layers giving $\bar{J}_\ell$ more multiplicative factors on average than Pythia's $36$.
+
+\begin{table}[H]
+\centering
+\caption{Mean $R^2$ by model, K2-Horizon-32B (wikitext), all 1{,}449 cells.}
+\label{tab:k2-summary}
+\begin{tabular}{lccc}
+\toprule
+& MP & Log-normal & Semicircle ($\log\lambda$) \\
+\midrule
+Mean $R^2$ & 0.618 & \textbf{0.990} & 0.941 \\
+Cells won (of 1{,}449) & 0 & \textbf{1{,}449} & 0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/k2_heatmap.png}
+\caption{K2-Horizon-32B, 63 layers $\times$ 23 checkpoints (stage/step). \textbf{Left}: log-normal (green) wins every cell --- no checkpoint is close enough to initialization to show the semicircle regime. \textbf{Right}: $R^2$ of the best-fitting (log-normal) model; fit quality is lowest for shallow-to-mid layers at the earliest available checkpoint and improves with training depth and model depth.}
+\label{fig:k2-heatmap}
+\end{figure}
+
+%=====================================================================
+\section{Discussion}
+%=====================================================================
+
+\paragraph{A single mechanism, two predictions.} The number of (approximately) free matrix factors composing $\bar{J}_\ell$ is controlled by two things: how many layers remain between $\ell$ and the output ($L-\ell$), and how much training has correlated those layers' weights with each other and with the data. The first factor explains why, \emph{at any fixed training step}, deep layers are always closer to MP (few factors) and shallow layers are always further from it (many factors). The second explains why, \emph{at any fixed layer}, the picture degrades from semicircle towards log-normal as training proceeds: training does not change the number of factors, but it breaks the independence and rotational invariance that make those factors \emph{free} rather than merely independent, which is the hypothesis under which the free (semicircle) rather than classical (Gaussian/log-normal) CLT applies.
+
+\paragraph{Log-normal as the ``no information'' prior.} Once freeness is broken, the weakest assumption remaining is just that $\log\lambda$ is a sum of many (not necessarily free, not necessarily independent) contributions with finite variance and no exceptional dependence structure --- the generic setting in which the classical CLT, not the free CLT, is the relevant limit theorem. This is consistent with log-normal being not just \emph{a} good fit but the \emph{default} fit once the free-probability assumptions no longer hold: it is the best-fitting model overall for Pythia post-training (62\% of cells, and the single best mean-$R^2$ model: 0.978) and uniformly for K2-Horizon-32B (100\% of cells).
+
+\paragraph{Caveats.} (1) The semicircle-in-$\log\lambda$ parametrization is a bounded-support, square-root-vanishing-at-the-edge density; at finite $d_{\mathrm{model}}$ and finite layer count the asymptotic limit is only approximate, and the excellent fits at initialization could in principle partly reflect finite-size corrections that happen to resemble a semicircle. (2) The three models compared are not nested, so a higher $R^2$ for one model is evidence of relative fit quality, not a formal test of the free-probability mechanism; we take the \emph{pattern} of the transition (abrupt, layer- and training-dependent, consistent with the predicted direction in both models) as the primary evidence, not any single fit. (3) Transformer blocks are not pure linear random matrices --- normalization layers, attention's data-dependent mixing, and nonlinear activations are all present --- so the freeness argument is only exact for a linearized, randomly-initialized network; its approximate validity for the full nonlinear Jacobian is itself consistent with prior work on nonlinear random matrix theory for deep networks~\cite{pennington2017nonlinear} and dynamical isometry~\cite{pennington2017}, but is not derived here from first principles.
+
+%=====================================================================
+\section{Conclusion and future work}
+%=====================================================================
+
+The eigenvalue spectra of J-Lens Gram matrices $\bar{J}_\ell^\top\bar{J}_\ell$ undergo a sharp, theoretically-predicted transition during training: from a free-probabilistic semicircle-in-$\log\lambda$ regime at initialization (mean $R^2=0.997$ for Pythia-12B-deduped, steps $\leq 512$) to a classical log-normal regime once training has proceeded (mean $R^2=0.979$ for steps $\geq 2{,}000$; $100\%$ of cells for the fully-trained-only K2-Horizon-32B), with the plain Marchenko--Pastur law remaining the best description only for the deepest layers at any training step. This is consistent with $\bar{J}_\ell$ being a product of an effectively free collection of random matrices at initialization, and with training breaking the independence/rotational-invariance structure that freeness requires.
+
+Natural next steps: (i) derive, from the free multiplicative convolution of MP laws, an explicit prediction for the \emph{rate} of convergence to the semicircle law as a function of the number of factors $(L-\ell)$, and test it against the layer-dependence observed here; (ii) construct a single interpolating model (e.g., a $k$-fold free multiplicative convolution of MP with $k$ itself a fitted, training-step-dependent parameter) that smoothly bridges the semicircle and MP endpoints without introducing log-normal as a separate regime; (iii) extend the grid to the random-token corpus already computed for Pythia-12B-deduped, and to additional model families, to test whether the transition step (here, between steps 512 and 2{,}000) scales with learning rate or batch size.
+
+%=====================================================================
+\begin{thebibliography}{9}
+
+\bibitem{jacobian-lens}
+Anthropic, ``Jacobian Lens: A Tool for Interpreting Transformer Circuits,'' GitHub repository \texttt{anthropics/jacobian-lens}, 2025. \url{https://github.com/anthropics/jacobian-lens}
+
+\bibitem{marchenko1967}
+V. A. Marchenko and L. A. Pastur, ``Distribution of eigenvalues for some sets of random matrices,'' \emph{Mathematics of the USSR-Sbornik}, 1(4):457--483, 1967.
+
+\bibitem{voiculescu1986}
+D. Voiculescu, ``Addition of certain non-commuting random variables,'' \emph{Journal of Functional Analysis}, 66(3):323--346, 1986.
+
+\bibitem{voiculescu1991}
+D. Voiculescu, ``Limit laws for random matrices and free products,'' \emph{Inventiones Mathematicae}, 104:201--220, 1991.
+
+\bibitem{nica2006}
+A. Nica and R. Speicher, \emph{Lectures on the Combinatorics of Free Probability}, London Mathematical Society Lecture Note Series 335, Cambridge University Press, 2006.
+
+\bibitem{mingo2017}
+J. Mingo and R. Speicher, \emph{Free Probability and Random Matrices}, Fields Institute Monographs, Springer, 2017.
+
+\bibitem{burda2010}
+Z. Burda, A. Jarosz, G. Livan, M. A. Nowak, and A. \'Swi\k{e}ch, ``Eigenvalues and singular values of products of rectangular Gaussian random matrices,'' \emph{Physical Review E}, 82:061114, 2010.
+
+\bibitem{pennington2017}
+J. Pennington, S. Schoenholz, and S. Ganguli, ``Resurrecting the sigmoid in deep learning through dynamical isometry: theory and practice,'' \emph{NeurIPS}, 2017.
+
+\bibitem{pennington2017nonlinear}
+J. Pennington and P. Worah, ``Nonlinear random matrix theory for deep learning,'' \emph{NeurIPS}, 2017.
+
+\end{thebibliography}
+
+\end{document}

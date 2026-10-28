@@ -127,6 +127,12 @@ uv run python scripts/plot_evolution.py --results-dir results --output-dir figur
 # Eigenvalue distribution grid (all checkpoints, all layers)
 uv run python scripts/plot_eigendist.py --results-dir results
 
+# Interactive raw spectra: all Pythia-12B layers and common checkpoints
+uv run python scripts/plot_spectra_dashboard.py
+
+# Interactive eigenvalue histograms: all Pythia-12B layers and common checkpoints
+uv run python scripts/plot_spectra_histogram_dashboard.py
+
 # J-lens vs benchmark correlations (requires eval data)
 uv run python scripts/prepare_eval_data.py   # Step 1: download + cross-join
 uv run python scripts/plot_benchmark_corr.py  # Step 2: generate figures

@@ -1,10 +1,11 @@
 ---
 name: run-pipeline
 description: |
-  Run the jlens Jacobian-lens spectral analysis pipeline on Pythia-160M
-  checkpoints.  Covers checkpoint discovery, Slurm job submission, resume
-  logic, config, and HDF5 result storage.  Use when asked to run jacobians,
-  process checkpoints, submit Slurm jobs, or debug pipeline failures.
+  Run the jlens Jacobian-lens spectral analysis pipeline on Pythia-160M,
+  Pythia-12B, or OLMo3-32B checkpoints.  Covers checkpoint discovery,
+  Slurm job submission, resume logic, config, and HDF5 result storage.
+  Use when asked to run jacobians, process checkpoints, submit Slurm
+  jobs, or debug pipeline failures.
 ---
 
 # Run Pipeline — jlens
@@ -20,6 +21,7 @@ checkpoints.
 | **Pythia-160M**: Full array job (153 ckpts, 8 GPUs) | `sbatch scripts/run_full.sh` |
 | **Pythia-12B**: Full array job (154 ckpts, 8 GPUs) | `sbatch scripts/run_full_12b.sh` |
 | **Pythia-12B**: Single checkpoint test | `sbatch scripts/run_single_12b.sh` |
+| **OLMo3-32B**: Full array job (65 ckpts, 8 GPUs) | `sbatch scripts/run_olmo3_32b.sh` |
 | Single checkpoint (interactive) | `uv run python -m jlens.cli run --checkpoints 143000 --n-prompts 10` |
 | Resume (skip completed) | Same command — `is_checkpoint_done` skips existing `stepXXXX/` dirs |
 | Check what's done | `ls -d results/step*/` |

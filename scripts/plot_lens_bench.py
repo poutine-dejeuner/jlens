@@ -197,6 +197,56 @@ def plot_lens_vs_metrics(lens_data, spectral, out_dir):
         plt.close(fig)
         print(f"  {fname}_vs_metrics.png  (best: {METRIC_LABELS.get(best, best)}, r={correlations[best]:+.3f})")
 
+        # ── Also save a linear-scale version ──
+        fig2, ax1b = plt.subplots(figsize=(12, 6))
+        ax1b.plot(steps[mask_b], bvals[mask_b],
+                  color="black", linewidth=2.5, marker="o", markersize=5,
+                  label="pass@1 (%)", zorder=10)
+        ax1b.set_ylabel(f"{BENCH_NAMES_DISPLAY.get(bname, bname)} pass@1 (%)",
+                        fontsize=13, color="black")
+        ax1b.tick_params(axis="y", labelcolor="black")
+
+        ax2b = ax1b.twinx()
+        for ji, sn in enumerate(sorted_spec):
+            src_steps, src_vals = spectral[sn]
+            interp = interpolate_to_steps(steps, src_steps, src_vals)
+            mask_j = ~np.isnan(interp)
+            if not mask_j.any():
+                continue
+            j_norm = ((interp[mask_j] - interp[mask_j].min())
+                      / (interp[mask_j].max() - interp[mask_j].min() + 1e-10))
+            is_best = (sn == best)
+            r_val = correlations[sn]
+            lbl = f"{METRIC_LABELS.get(sn, sn)}  (r={r_val:+.3f})"
+            ax2b.plot(steps[mask_j], j_norm,
+                      color=colors_jlens[ji % len(colors_jlens)],
+                      linewidth=3.0 if is_best else 1.2,
+                      alpha=1.0 if is_best else 0.65,
+                      label=lbl, zorder=9 if is_best else 1)
+
+        ax2b.set_ylabel("J-Lens Metric (normalized)", fontsize=11)
+        ax2b.set_ylim(-0.05, 1.05)
+
+        ax1b.set_title(
+            f"Pythia-12B: {BENCH_NAMES_DISPLAY.get(bname, bname)} vs J-Lens Metrics (linear)",
+            fontsize=14, fontweight="bold",
+        )
+        ax1b.set_xlabel("Training Step", fontsize=11)
+        ax1b.grid(True, alpha=0.3)
+
+        lines1b, labels1b = ax1b.get_legend_handles_labels()
+        lines2b, labels2b = ax2b.get_legend_handles_labels()
+        best_idx2 = sorted_spec.index(best)
+        lines2b = [lines2b[best_idx2]] + [l for i, l in enumerate(lines2b) if i != best_idx2]
+        labels2b = [labels2b[best_idx2]] + [l for i, l in enumerate(labels2b) if i != best_idx2]
+        ax1b.legend(lines1b + lines2b, labels1b + labels2b, fontsize=7,
+                    loc="upper left", ncol=2)
+
+        fig2.tight_layout()
+        fig2.savefig(out_dir / f"{fname}_vs_metrics_linear.png", dpi=150, bbox_inches="tight")
+        plt.close(fig2)
+        print(f"  {fname}_vs_metrics_linear.png")
+
 
 def plot_summary_grid(lens_data, spectral, out_path):
     """2×3 summary: pass@1 + best metric + loss overlay for each benchmark."""
@@ -254,6 +304,60 @@ def plot_summary_grid(lens_data, spectral, out_path):
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  {out_path.name}")
+
+    # ── Also save a linear-scale version ──
+    fig2, axes2 = plt.subplots(2, 3, figsize=(18, 10))
+    for ax, bname in zip(axes2.flat, bench_order):
+        bdata = lens_data[bname]
+        steps = bdata["steps"]
+        bvals = bdata["pass_at_1"] * 100
+
+        # Find best metric
+        best_sn = None
+        best_r = 0
+        for sn in sorted(spectral.keys()):
+            src_steps, src_vals = spectral[sn]
+            interp = interpolate_to_steps(steps, src_steps, src_vals)
+            mask = ~(np.isnan(bvals) | np.isnan(interp))
+            if mask.sum() < 3:
+                continue
+            r, _ = pearsonr(bvals[mask], interp[mask])
+            if abs(r) > abs(best_r):
+                best_r = r
+                best_sn = sn
+
+        ax.plot(steps, bvals, color="black", linewidth=2, marker="o",
+                markersize=4, alpha=0.9)
+        ax.set_title(
+            f"{BENCH_NAMES_DISPLAY.get(bname, bname)}\n"
+            f"vs {METRIC_LABELS.get(best_sn, best_sn)} (r={best_r:+.2f})",
+            fontsize=11, fontweight="bold",
+        )
+        ax.grid(True, alpha=0.3)
+
+        # Best metric overlay on twin axis
+        if best_sn is not None:
+            src_steps, src_vals = spectral[best_sn]
+            interp = interpolate_to_steps(steps, src_steps, src_vals)
+            mask = ~np.isnan(interp)
+            if mask.any():
+                j_norm = ((interp[mask] - interp[mask].min())
+                          / (interp[mask].max() - interp[mask].min() + 1e-10))
+                ax2 = ax.twinx()
+                ax2.plot(steps[mask], j_norm, color="red", linewidth=1.2,
+                         linestyle="--", alpha=0.7)
+                ax2.set_ylim(-0.05, 1.05)
+                ax2.set_yticks([])
+
+    fig2.suptitle(
+        "Pythia-12B: Lens Benchmark pass@1 × Best J-Lens Metric (linear)",
+        fontsize=16, fontweight="bold", y=1.01,
+    )
+    fig2.tight_layout()
+    linear_path = out_path.parent / (out_path.stem + "_linear.png")
+    fig2.savefig(linear_path, dpi=150, bbox_inches="tight")
+    plt.close(fig2)
+    print(f"  {linear_path.name}")
 
 
 def main():

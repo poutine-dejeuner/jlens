@@ -177,9 +177,11 @@ def plot_summary_grid(lens_wt, lens_rd, out_dir):
                                   np.array(bdata_rd["pass_at_1"]) * 100)
 
         ax.plot(steps / 1000, vr, color=COLOR_RD, linewidth=1.6,
-                marker="s", markersize=2.5, alpha=0.75, zorder=2)
+                marker="s", markersize=2.5, alpha=0.75, zorder=2,
+                label="random")
         ax.plot(steps / 1000, vw, color=COLOR_WT, linewidth=2.0,
-                marker="o", markersize=3, alpha=0.85, zorder=3)
+                marker="o", markersize=3, alpha=0.85, zorder=3,
+                label="wikitext")
         ax.fill_between(steps / 1000, vw, vr,
                         color="#888888", alpha=0.14, linewidth=0, zorder=1)
 
@@ -197,7 +199,9 @@ def plot_summary_grid(lens_wt, lens_rd, out_dir):
                               edgecolor="gray", alpha=0.8))
 
         if bname == bench_order[0]:
-            ax.legend(fontsize=8, loc="upper left")
+            legend = ax.legend(fontsize=9, loc="upper left")
+            if legend:
+                legend.set_title("JLens", prop={"size": 8})
 
     fig.suptitle("Pythia-12B: Lens Benchmarks — Wikitext vs Random JLens",
                  fontsize=16, fontweight="bold", y=1.01)

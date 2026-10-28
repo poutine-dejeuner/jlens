@@ -52,6 +52,8 @@ def main(debug: bool):
               help="Comma-separated explicit checkpoint steps (overrides start/end)")
 @click.option("--dim-batch", default=8, type=int,
               help="Output dims per backward pass (higher = more VRAM, same FLOPs)")
+@click.option("--revision-prefix", default="step",
+              help="Branch revision prefix (e.g. 'step' for Pythia, 'stage1-step' for OLMo3)")
 @click.option("--scratch-dir", default=None, type=click.Path(),
               help="Local scratch directory for HDF5 writes before NFS move")
 @click.option("--overlap", is_flag=True, default=False,
@@ -78,6 +80,7 @@ def run(
     checkpoints: str | None,
     dim_batch: int,
     scratch_dir: str | None,
+    revision_prefix: str,
     overlap: bool,
     overlap_seed: int,
     overlap_n_prompts: int | None,
@@ -95,6 +98,7 @@ def run(
         cache_dir=Path(cache_dir) if cache_dir else None,
         checkpoint_step_start=start_step,
         checkpoint_step_end=end_step,
+        revision_prefix=revision_prefix,
         dim_batch=dim_batch,
         scratch_dir=Path(scratch_dir) if scratch_dir else None,
     )

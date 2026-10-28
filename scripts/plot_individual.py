@@ -176,7 +176,7 @@ def plot_per_benchmark(cross_join_path, out_dir):
                  label=f"{bname} (%)", zorder=10)
         ax1.set_ylabel(f"{bname} Accuracy (%)", fontsize=13, color="black")
         ax1.tick_params(axis="y", labelcolor="black")
-        ax1.set_xscale("log")
+        ax1.set_xscale("symlog", linthresh=100)
 
         # J-lens metrics (secondary y, normalized)
         ax2 = ax1.twinx()
@@ -216,6 +216,50 @@ def plot_per_benchmark(cross_join_path, out_dir):
         fig.savefig(out_dir / f"{bname}.png", dpi=150, bbox_inches="tight")
         plt.close(fig)
         print(f"  {bname}.png")
+
+        # ── Also save a linear-scale version ──
+        fig2, ax1b = plt.subplots(figsize=(12, 6))
+        ax1b.plot(steps[mask_b], bvals[mask_b] * 100,
+                  color="black", linewidth=2.5, marker="o", markersize=5,
+                  label=f"{bname} (%)", zorder=10)
+        ax1b.set_ylabel(f"{bname} Accuracy (%)", fontsize=13, color="black")
+        ax1b.tick_params(axis="y", labelcolor="black")
+
+        ax2b = ax1b.twinx()
+        for ji, jcol in enumerate(sorted_jlens):
+            jvals = cj[jcol]
+            mask_j = ~np.isnan(jvals)
+            if not mask_j.any():
+                continue
+            j_norm = (jvals[mask_j] - jvals[mask_j].min()) / (jvals[mask_j].max() - jvals[mask_j].min() + 1e-10)
+            is_best = (jcol == best)
+            r_val = correlations[jcol]
+            lbl = f"{jlens_label(jcol)}  (r={r_val:+.3f})"
+            ax2b.plot(steps[mask_j], j_norm,
+                      color=colors_jlens[ji % len(colors_jlens)],
+                      linewidth=3.0 if is_best else 1.2,
+                      alpha=1.0 if is_best else 0.65,
+                      label=lbl, zorder=9 if is_best else 1)
+
+        ax2b.set_ylabel("J-Lens Metric (normalized)", fontsize=11)
+        ax2b.set_ylim(-0.05, 1.05)
+
+        ax1b.set_title(f"Pythia-12B: {bname} vs J-Lens Metrics (linear)", fontsize=14, fontweight="bold")
+        ax1b.set_xlabel("Training Step", fontsize=11)
+        ax1b.grid(True, alpha=0.3)
+
+        lines1b, labels1b = ax1b.get_legend_handles_labels()
+        lines2b, labels2b = ax2b.get_legend_handles_labels()
+        best_idx2 = sorted_jlens.index(best)
+        lines2b = [lines2b[best_idx2]] + [l for i, l in enumerate(lines2b) if i != best_idx2]
+        labels2b = [labels2b[best_idx2]] + [l for i, l in enumerate(labels2b) if i != best_idx2]
+        ax1b.legend(lines1b + lines2b, labels1b + labels2b, fontsize=7,
+                    loc="upper left", ncol=2)
+
+        fig2.tight_layout()
+        fig2.savefig(out_dir / f"{bname}_linear.png", dpi=150, bbox_inches="tight")
+        plt.close(fig2)
+        print(f"  {bname}_linear.png")
 
 
 def main():

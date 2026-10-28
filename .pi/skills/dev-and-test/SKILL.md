@@ -39,7 +39,8 @@ tests/
 ├── test_storage.py       # HDF5 save/load round-trip, checkpoint detection
 ├── test_pipeline.py      # End-to-end: accumulator → spectra → storage
 ├── test_cli.py           # CLI option parsing, help output
-└── test_bugs.py          # Regression tests for fixed bugs
+├── test_bugs.py          # Regression tests for fixed bugs
+└── test_circle_probe.py  # Circle probe: Qwen3.5 hooks (tiny model), token positions, closure scores
 ```
 
 ## Package architecture
@@ -49,6 +50,7 @@ jlens/
 ├── _bridge.py            # sys.path hack: imports upstream anthropics/jacobian-lens
 ├── accumulator.py        # Online accumulation of J̄, J⊤J Gram, κ stats
 ├── checkpoint_manager.py # Discover, load, unload Pythia-160M checkpoints
+├── circle_probe.py       # Cyclic-concept probe: per-layer/per-head reps + closure scores (Qwen3.5 hybrid)
 ├── cli.py                # Click CLI: run, analyze, version
 ├── config.py             # PipelineConfig dataclass
 ├── jacobian.py           # Thin wrapper: upstream jacobian_for_prompt estimator

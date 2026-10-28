@@ -28,6 +28,7 @@ class PipelineConfig:
     overlap_n_prompts: int | None = None  # defaults to n_prompts
 
     # Checkpoints
+    revision_prefix: str = "step"  # branch name prefix, e.g. "step" for Pythia, "stage1-step" for OLMo3
     checkpoint_step_start: int = 1  # skip step0 (random init)
     checkpoint_step_end: int = 143000
     checkpoints: Optional[list[str]] = None  # explicit list overrides range

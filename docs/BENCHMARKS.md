@@ -85,3 +85,9 @@ Scores computed with sacreBLEU.
   fluent English, TER drops because the output shares more tokens with the
   reference. But it never reaches translation quality (TER stays > 100).
 
+
+## Spectrum visualization data
+
+`scripts/plot_spectra_dashboard.py` uses no benchmark scores. It reads the
+per-layer eigenvalue datasets directly from the Pythia-12B wikitext and
+random-token `spectra.h5` result trees.

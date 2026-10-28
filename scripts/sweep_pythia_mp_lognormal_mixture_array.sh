@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=pythia-mp-ln
+#SBATCH --array=0-47%48
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=4G
+#SBATCH --time=4:00:00
+#SBATCH --output=logs/pythia_mp_ln_%A_%a.out
+#SBATCH --error=logs/pythia_mp_ln_%A_%a.err
+
+set -euo pipefail
+
+cd "${SLURM_SUBMIT_DIR:?This script must be submitted with sbatch.}"
+export PYTHONPATH="$PWD/scripts${PYTHONPATH:+:$PYTHONPATH}"
+
+mapfile -t steps < <(
+    find /data/jlens/pythia-12b-deduped -maxdepth 1 -type d -name 'step*' \
+        -printf '%f\n' |
+        sed 's/^step//' |
+        sort -n
+)
+step="${steps[SLURM_ARRAY_TASK_ID]:?Missing checkpoint for array index ${SLURM_ARRAY_TASK_ID}}"
+
+uv run \
+    --with numpy \
+    --with scipy \
+    --with h5py \
+    --with matplotlib \
+    python scripts/fit_pythia_mp_lognormal_mixture.py \
+    --results-dir /data/jlens/pythia-12b-deduped \
+    --workers 1 \
+    --steps "$step" \
+    --csv "results/pythia_mp_lognormal_mixture_parts/step_${step}.csv"
